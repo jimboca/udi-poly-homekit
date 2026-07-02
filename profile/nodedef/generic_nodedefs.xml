@@ -1,5 +1,5 @@
 <nodeDefs>
-  <nodeDef id="HKHubThermostat" nls="hktherm">
+  <nodeDef id="HKHubThermostat" nodeType="140" nls="140E">
     <editors />
     <sts>
       <st id="ST" editor="I_TEMP_F" />
@@ -25,7 +25,7 @@
       </accepts>
     </cmds>
   </nodeDef>
-  <nodeDef id="HKHubEcobeeThermostat" nls="hkecoth">
+  <nodeDef id="HKHubEcobeeThermostat" nodeType="140" nls="140E">
     <editors />
     <sts>
       <st id="ST" editor="I_TEMP_F" />

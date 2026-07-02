@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.8] - 2026-07-02
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Fixed
+
+- **(Professional)** **Thermostat icon migration (140E):** Existing IoX thermostat rows are now deleted (sensor children first) before `addnode` when profile revision is stale — fixes nodes where `poly.getNode()` was empty but PG3 still held the old row (`timeAdded` unchanged, wrong tree icon). Bump `_THERMOSTAT_PROFILE_REV` to **2** so nodes that falsely recorded rev=1 are re-migrated.
+- **(Professional)** **NLS nodedef labels:** Added missing `ND-HKHubSensorDry-NAME` / `ND-HKHubMotionSensor-NAME` (and matching `ICON`) in `en_us.txt`.
+
+### Changed
+
+- **(Professional)** **Upgrade / migration:** IoX tree **icon and nodedef display names are bound at first `addnode`** — profile-only updates do not refresh existing nodes. After updating to **2.0.8**, **all affected generic IoX nodes must be deleted and re-added** (thermostats, dry-contact sensors, motion sensors, and any node created before the 140E thermostat profile or missing NLS labels). On first sync, the plugin **automatically** deletes and recreates stale thermostats (sensor children first, then thermostat) and stale sensor nodedefs at the **same address** — no re-pairing required. Log lines: `Deleting N sensor child(ren) of thermostat …`, `Recreating thermostat IoX node …`, `Recreating sensor IoX node …`. If icons or type names are still wrong after restart, restart the node server once more so profile rev **2** migration can complete; confirm `addnode` responses show a **new** `timeAdded` (not the pre-upgrade timestamp).
+- **(Standard + Professional)** Version **2.0.8** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.7] - 2026-06-25
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

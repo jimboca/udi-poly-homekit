@@ -119,6 +119,10 @@ _HUB_BOOTSTRAP_AFTER_CONFIG_RETRY_SEC = 0.1
 # If CONFIGDONE never arrives (misbehaving client), still try once custom handlers have run.
 _HUB_BOOTSTRAP_FALLBACK_SEC = 75.0
 _DATA_KEY_NODE_KEY_NEXT_INDEX = "node_key_next_index"
+# Bump when thermostat nodedef/nls/hint profile changes require IoX delete+addnode.
+_THERMOSTAT_PROFILE_REV = 2
+_THERMOSTAT_PROFILE_REV_KEY = "thermostat_profile_rev"
+_THERMOSTAT_EXPECTED_HINT = 0x010C0100
 
 
 def _coerce_change_node_names(val: Any) -> bool:
@@ -2654,6 +2658,7 @@ class Controller(Node):
                 continue
             self._sync_generic_nodes(did, classification)
             self._sync_sensor_nodes(did, pairing, classification)
+        self._mark_thermostat_profile_rev()
 
     async def _classify_device_async(self, device_id: str) -> tuple[str, list, Any]:
         from homekit_hub.device_classifier import classify_accessories
@@ -2740,6 +2745,69 @@ class Controller(Node):
             return False
         return str(getattr(node, 'primary', '') or '') != str(addr or '')
 
+    def _stored_thermostat_profile_rev(self) -> int:
+        try:
+            return int(self.TypedData.get(_THERMOSTAT_PROFILE_REV_KEY) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _mark_thermostat_profile_rev(self) -> None:
+        if self._stored_thermostat_profile_rev() >= _THERMOSTAT_PROFILE_REV:
+            return
+        if self._any_thermostat_profile_stale():
+            LOGGER.warning(
+                'Thermostat 140E profile migration incomplete; will retry on next sync'
+            )
+            return
+        td: dict[str, Any] = {}
+        try:
+            for k in self.TypedData.keys():
+                td[k] = self.TypedData[k]
+        except Exception:
+            td = {}
+        td[_THERMOSTAT_PROFILE_REV_KEY] = _THERMOSTAT_PROFILE_REV
+        self.TypedData.load(td, save=True)
+
+    def _thermostat_pg3_metadata_stale(self, addr: str, node_def: str = '') -> bool:
+        """True when PG3/IoX still has pre-140E thermostat metadata (hint, nodeType)."""
+        addr = str(addr or '').strip()
+        if not addr:
+            return False
+        node_def = str(node_def or '').strip()
+        meta = self._pg3_node_meta(addr)
+        if meta is None:
+            return False
+        if not node_def:
+            node_def = str(meta.get('nodeDefId') or '')
+        if node_def not in self._THERMOSTAT_NODE_DEF_IDS:
+            return False
+        node_type = meta.get('nodeType') if meta.get('nodeType') is not None else meta.get('type')
+        if node_type is not None and str(node_type) != '140':
+            return True
+        nls = meta.get('nls')
+        if nls is not None and str(nls).strip() not in ('', '140E'):
+            return True
+        hint = meta.get('hint')
+        if hint is not None:
+            try:
+                if int(str(hint), 0) != _THERMOSTAT_EXPECTED_HINT:
+                    return True
+            except ValueError:
+                return True
+        return False
+
+    def _thermostat_profile_stale(self, node: Any, addr: str) -> bool:
+        """True when IoX still has pre-140E thermostat metadata (hint, nodeType, nls)."""
+        node_def = str(getattr(node, 'id', '') or '')
+        if node_def not in self._THERMOSTAT_NODE_DEF_IDS:
+            return False
+        addr = str(addr or getattr(node, 'address', '') or '').strip()
+        if not addr:
+            return False
+        if self._stored_thermostat_profile_rev() < _THERMOSTAT_PROFILE_REV:
+            return True
+        return self._thermostat_pg3_metadata_stale(addr, node_def)
+
     def _pg3_node_meta(self, addr: str) -> Optional[dict]:
         addr = str(addr or '').strip()
         if not addr or not hasattr(self.poly, 'getNodesFromDb'):
@@ -2801,6 +2869,132 @@ class Controller(Node):
         if anode is None:
             LOGGER.error('Failed to add node %s', addr or '?')
         return anode
+
+    def _pg3_child_addresses(self, primary_addr: str) -> list[str]:
+        """IoX nodes whose primaryNode is primary_addr (excludes the primary itself)."""
+        primary_addr = str(primary_addr or '').strip()
+        if not primary_addr or not hasattr(self.poly, 'getNodesFromDb'):
+            return []
+        children: list[str] = []
+        try:
+            rows = self.poly.getNodesFromDb() or []
+        except Exception:
+            LOGGER.debug('PG3 child lookup failed for %s', primary_addr, exc_info=True)
+            return []
+        for meta in rows:
+            if not isinstance(meta, dict):
+                continue
+            addr = str(meta.get('address') or '').strip()
+            if not addr or addr == primary_addr:
+                continue
+            if str(meta.get('primaryNode') or '').strip() == primary_addr:
+                children.append(addr)
+        return sorted(children)
+
+    def _thermostat_sensor_child_addresses(
+        self, thermostat_addr: str, device_id: str = ''
+    ) -> list[str]:
+        """Sensor IoX addresses parented under a thermostat (cache + PG3)."""
+        thermostat_addr = str(thermostat_addr or '').strip()
+        did = str(device_id or '').strip().lower()
+        addrs: set[str] = set(self._pg3_child_addresses(thermostat_addr))
+        sensor_defs = frozenset(
+            {'HKHubSensor', 'HKHubSensorDry', 'HKHubMotionSensor'}
+        )
+        for addr, node in self._generic_nodes.items():
+            child_addr = str(addr or '').strip()
+            if not child_addr or child_addr == thermostat_addr:
+                continue
+            if str(getattr(node, 'primary', '') or '').strip() != thermostat_addr:
+                continue
+            if did and getattr(node, 'device_id', '').lower() != did:
+                continue
+            role = str(getattr(node, 'role', '') or '')
+            node_def = str(getattr(node, 'id', '') or '')
+            if role in ('sensor', 'motion_sensor') or node_def in sensor_defs:
+                addrs.add(child_addr)
+        return sorted(a for a in addrs if a)
+
+    def _delete_thermostat_for_recreation(
+        self, thermostat_addr: str, device_id: str = '', *, reason: str = ''
+    ) -> bool:
+        """Delete sensor children first, then thermostat, so IoX allows removenode."""
+        thermostat_addr = str(thermostat_addr or '').strip()
+        if not thermostat_addr:
+            return False
+        label = reason or 'profile migration'
+        children = self._thermostat_sensor_child_addresses(thermostat_addr, device_id)
+        if children:
+            LOGGER.info(
+                'Deleting %s sensor child(ren) of thermostat %s before recreation (%s)',
+                len(children),
+                thermostat_addr,
+                label,
+            )
+            for child_addr in children:
+                self._existing_sensor_addnode_retried.discard(child_addr)
+                self._delete_generic_node_by_address(child_addr)
+        LOGGER.info('Recreating thermostat IoX node %s (%s)', thermostat_addr, label)
+        self._delete_generic_node_by_address(thermostat_addr)
+        if self._pg3_node_meta(thermostat_addr) is not None:
+            LOGGER.warning(
+                'Thermostat %s still in PG3 after delete; purging stale node (%s)',
+                thermostat_addr,
+                label,
+            )
+            self._purge_stale_pg3_node(thermostat_addr, reason=label)
+        return self._pg3_node_meta(thermostat_addr) is None
+
+    def _ensure_fresh_thermostat_pg3_node(
+        self, addr: str, device_id: str, node_def: str, *, reason: str = ''
+    ) -> None:
+        """Delete+recreate when PG3 still has a thermostat row with stale nls/hint bindings."""
+        if str(node_def or '') not in self._THERMOSTAT_NODE_DEF_IDS:
+            return
+        addr = str(addr or '').strip()
+        if not addr or self._pg3_node_meta(addr) is None:
+            return
+
+        class _Nd:
+            id = str(node_def)
+
+        if not self._thermostat_profile_stale(_Nd(), addr):
+            return
+        self._delete_thermostat_for_recreation(
+            addr,
+            device_id,
+            reason=reason or '140E profile (hint/icon/name)',
+        )
+
+    def _any_thermostat_profile_stale(self) -> bool:
+        seen: set[str] = set()
+        for addr, node in self._generic_nodes.items():
+            node_def = str(getattr(node, 'id', '') or '')
+            if node_def not in self._THERMOSTAT_NODE_DEF_IDS:
+                continue
+            child_addr = str(addr or '').strip()
+            if not child_addr:
+                continue
+            seen.add(child_addr)
+            if self._thermostat_pg3_metadata_stale(child_addr, node_def):
+                return True
+        if not hasattr(self.poly, 'getNodesFromDb'):
+            return False
+        try:
+            for meta in self.poly.getNodesFromDb() or []:
+                if not isinstance(meta, dict):
+                    continue
+                node_def = str(meta.get('nodeDefId') or '')
+                if node_def not in self._THERMOSTAT_NODE_DEF_IDS:
+                    continue
+                addr = str(meta.get('address') or '').strip()
+                if not addr or addr in seen:
+                    continue
+                if self._thermostat_pg3_metadata_stale(addr, node_def):
+                    return True
+        except Exception:
+            LOGGER.debug('thermostat profile stale scan failed', exc_info=True)
+        return False
 
     def _thermostat_generic_address(self, device_id: str) -> Optional[str]:
         did = str(device_id or '').strip().lower()
@@ -3379,7 +3573,9 @@ class Controller(Node):
                         addr,
                         getattr(existing, 'primary', '?'),
                     )
-                    self._delete_generic_node_by_address(addr)
+                    self._delete_thermostat_for_recreation(
+                        addr, did, reason='self-parent fix'
+                    )
                     existing = None
                 else:
                     actual_def = str(getattr(existing, 'id', '') or '')
@@ -3388,13 +3584,19 @@ class Controller(Node):
                         and actual_def in self._THERMOSTAT_NODE_DEF_IDS
                         and actual_def != node_def
                     ):
-                        LOGGER.info(
-                            'Recreating thermostat IoX node %s (%s -> %s)',
+                        self._delete_thermostat_for_recreation(
                             addr,
-                            actual_def,
-                            node_def,
+                            did,
+                            reason=f'nodedef {actual_def} -> {node_def}',
                         )
-                        self._delete_generic_node_by_address(addr)
+                        existing = None
+                    elif (
+                        node_def in self._THERMOSTAT_NODE_DEF_IDS
+                        and self._thermostat_profile_stale(existing, addr)
+                    ):
+                        self._delete_thermostat_for_recreation(
+                            addr, did, reason='140E profile (hint/icon/name)'
+                        )
                         existing = None
                 if existing is not None:
                     existing.char_bindings = dict(bindings)
@@ -3410,8 +3612,20 @@ class Controller(Node):
                         addr,
                         getattr(node, 'primary', '?'),
                     )
-                    self._delete_generic_node_by_address(addr)
+                    self._delete_thermostat_for_recreation(
+                        addr, did, reason='self-parent fix'
+                    )
                     node = None
+                if node is not None and node_def in self._THERMOSTAT_NODE_DEF_IDS:
+                    if self._thermostat_profile_stale(node, addr):
+                        self._delete_thermostat_for_recreation(
+                            addr, did, reason='140E profile (hint/icon/name)'
+                        )
+                        node = None
+                if node is None and node_def in self._THERMOSTAT_NODE_DEF_IDS:
+                    self._ensure_fresh_thermostat_pg3_node(
+                        addr, did, node_def, reason='140E profile (hint/icon/name)'
+                    )
                 if node is None:
                     if node_def == 'HKHubEcobeeThermostat':
                         node = EcobeeThermostatNode(

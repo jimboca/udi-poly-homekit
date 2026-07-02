@@ -306,6 +306,166 @@ def test_thermostat_must_self_parent_ok_when_self_parented():
     assert c._thermostat_must_self_parent(node, 'ge3811269468c9') is False
 
 
+def test_thermostat_profile_stale_when_rev_not_recorded():
+    c = _bare_controller()
+    c.TypedData = FakeTypedData({})
+    c.poly = MagicMock()
+    node = MagicMock(id='HKHubThermostat', address='ge3811269468c9')
+    assert c._thermostat_profile_stale(node, 'ge3811269468c9') is True
+
+
+def test_thermostat_profile_stale_when_pg3_hint_wrong():
+    c = _bare_controller()
+    c.TypedData = FakeTypedData({'thermostat_profile_rev': 1})
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = [
+        {'address': 'ge3811269468c9', 'nodeDefId': 'HKHubThermostat', 'hint': '0x0'}
+    ]
+    node = MagicMock(id='HKHubThermostat', address='ge3811269468c9')
+    assert c._thermostat_profile_stale(node, 'ge3811269468c9') is True
+
+
+def test_thermostat_profile_stale_when_rev_one_but_current_rev_two():
+    c = _bare_controller()
+    c.TypedData = FakeTypedData({'thermostat_profile_rev': 1})
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = [
+        {
+            'address': 'ge3811269468c9',
+            'nodeDefId': 'HKHubThermostat',
+            'nodeType': '140',
+            'hint': '0x010c0100',
+        }
+    ]
+    node = MagicMock(id='HKHubThermostat', address='ge3811269468c9')
+    assert c._thermostat_profile_stale(node, 'ge3811269468c9') is True
+
+
+def test_thermostat_profile_fresh_when_rev_and_hint_ok():
+    c = _bare_controller()
+    c.TypedData = FakeTypedData({'thermostat_profile_rev': 2})
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = [
+        {
+            'address': 'ge3811269468c9',
+            'nodeDefId': 'HKHubThermostat',
+            'nodeType': '140',
+            'hint': '0x010c0100',
+        }
+    ]
+    node = MagicMock(id='HKHubThermostat', address='ge3811269468c9')
+    assert c._thermostat_profile_stale(node, 'ge3811269468c9') is False
+
+
+def test_thermostat_sensor_child_addresses_from_pg3():
+    c = _bare_controller()
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = [
+        {'address': 'ge3811269468c9', 'primaryNode': 'ge3811269468c9'},
+        {'address': 'gsensor1', 'primaryNode': 'ge3811269468c9', 'nodeDefId': 'HKHubSensor'},
+        {'address': 'other', 'primaryNode': 'controller'},
+    ]
+    assert c._thermostat_sensor_child_addresses('ge3811269468c9') == ['gsensor1']
+
+
+def test_delete_thermostat_for_recreation_deletes_children_first():
+    c = _bare_controller()
+    c.poly = MagicMock()
+    child = MagicMock(
+        id='HKHubSensor',
+        primary='ge3811269468c9',
+        device_id='aa:bb',
+        role='sensor',
+        address='gsensor1',
+    )
+    therm = MagicMock(
+        id='HKHubEcobeeThermostat',
+        primary='ge3811269468c9',
+        device_id='aa:bb',
+        address='ge3811269468c9',
+    )
+    c._generic_nodes = {'gsensor1': child, 'ge3811269468c9': therm}
+    c._sensor_by_key = {('aa:bb', 3): child}
+    c._existing_sensor_addnode_retried = {'gsensor1'}
+    calls: list[str] = []
+
+    def del_node(addr):
+        calls.append(addr)
+
+    c.poly.delNode = del_node
+    c.poly.getNodesFromDb.side_effect = [
+        [
+            {'address': 'gsensor1', 'primaryNode': 'ge3811269468c9'},
+            {'address': 'ge3811269468c9', 'primaryNode': 'ge3811269468c9'},
+        ],
+        None,
+    ]
+    assert c._delete_thermostat_for_recreation(
+        'ge3811269468c9', 'aa:bb', reason='140E profile'
+    ) is True
+    assert calls == ['gsensor1', 'ge3811269468c9']
+    assert 'gsensor1' not in c._generic_nodes
+    assert 'ge3811269468c9' not in c._generic_nodes
+    assert 'gsensor1' not in c._existing_sensor_addnode_retried
+
+
+def test_mark_thermostat_profile_rev_skipped_when_stale():
+    c = _bare_controller()
+    c.TypedData = FakeTypedData({})
+    c.poly = MagicMock()
+    stale = MagicMock(id='HKHubThermostat', address='ge3811269468c9')
+    c._generic_nodes = {'ge3811269468c9': stale}
+    c.poly.getNodesFromDb.return_value = [
+        {'address': 'ge3811269468c9', 'nodeDefId': 'HKHubThermostat', 'hint': '0x0'}
+    ]
+    c._mark_thermostat_profile_rev()
+    assert c.TypedData.loads == []
+    assert c.TypedData.get('thermostat_profile_rev') is None
+
+
+def test_mark_thermostat_profile_rev_recorded_when_fresh():
+    c = _bare_controller()
+    c.TypedData = FakeTypedData({})
+    c.poly = MagicMock()
+    fresh = MagicMock(id='HKHubThermostat', address='ge3811269468c9')
+    c._generic_nodes = {'ge3811269468c9': fresh}
+    c.poly.getNodesFromDb.return_value = [
+        {
+            'address': 'ge3811269468c9',
+            'nodeDefId': 'HKHubThermostat',
+            'nodeType': '140',
+            'hint': '0x010c0100',
+        }
+    ]
+    c._mark_thermostat_profile_rev()
+    assert c.TypedData.get('thermostat_profile_rev') == 2
+
+
+def test_ensure_fresh_thermostat_pg3_node_deletes_when_pg3_row_stale():
+    c = _bare_controller()
+    c.TypedData = FakeTypedData({'thermostat_profile_rev': 1})
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.side_effect = [
+        [
+            {
+                'address': 'ge3811269468c9',
+                'nodeDefId': 'HKHubEcobeeThermostat',
+                'nodeType': '140',
+                'hint': '0x010c0100',
+            }
+        ],
+    ]
+    c._delete_thermostat_for_recreation = MagicMock(return_value=True)
+    c._ensure_fresh_thermostat_pg3_node(
+        'ge3811269468c9', '44:be:73:09:47:20', 'HKHubEcobeeThermostat'
+    )
+    c._delete_thermostat_for_recreation.assert_called_once_with(
+        'ge3811269468c9',
+        '44:be:73:09:47:20',
+        reason='140E profile (hint/icon/name)',
+    )
+
+
 def test_pg3_primary_mismatch_when_controller_parent():
     c = _bare_controller()
     c.poly = MagicMock()
