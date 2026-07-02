@@ -16,7 +16,7 @@
 #                           Then in PG3 UI, edit the plugin and set Version to that exact VERSION.
 #   3. `make beta`        — push HEAD to the `beta` branch (reference) and build $(NAME)-beta-<VERSION>.zip.
 #                           Then in PG3 UI, edit the plugin and set Version to that exact VERSION.
-#   4. `make production`  — push HEAD to the `production` branch (reference) and build $(NAME)-production-<VERSION>.zip.
+#   4. `make production`  — push HEAD to the `production` branch (reference) and build $(NAME)-Production-Professional-<VERSION>.zip (+ Standard via production-standard).
 # The track-specific zip files are the actual deliverables uploaded to PG3.
 
 PYTHON ?= python3
@@ -70,7 +70,7 @@ help:
 	@echo "PG3 release (clean tree; not detached HEAD)"
 	@echo "  make release             Tag v\$$VERSION and push current branch + tag"
 	@echo "  make beta                Push HEAD -> $(GIT_REMOTE)/$(BRANCH_BETA) and build $(NAME)-$(BRANCH_BETA)-\$$VERSION.zip"
-	@echo "  make production          Push HEAD -> $(GIT_REMOTE)/$(BRANCH_PRODUCTION) and build $(NAME)-$(BRANCH_PRODUCTION)-\$$VERSION.zip"
+	@echo "  make production          Push HEAD -> $(GIT_REMOTE)/$(BRANCH_PRODUCTION); build $(NAME)-Production-Professional-\$$VERSION.zip + Standard"
 	@echo "  make production-standard Build $(NAME)-Production-Standard-\$$VERSION.zip (Standard store artifact)"
 	@echo "                           After make release / make beta, edit plugin in PG3 UI and set Version to \$$VERSION"
 	@echo "  make zip                 Ad-hoc local $(NAME).zip (no version suffix)"
@@ -118,7 +118,7 @@ beta:
 	echo "Built $$ROOT/$$ZIPFILE for upload to PG3."; \
 	echo "PG3 UI action required: edit this plugin and set Version to $$VERSION."
 
-# Push current HEAD to $(GIT_REMOTE)/$(BRANCH_PRODUCTION) (reference) and build $(NAME)-$(BRANCH_PRODUCTION)-<VERSION>.zip
+# Push current HEAD to $(GIT_REMOTE)/$(BRANCH_PRODUCTION) (reference) and build $(NAME)-Production-Professional-<VERSION>.zip
 # for upload to PG3. Requires clean tree; not detached HEAD.
 production:
 	@set -e; \
@@ -140,10 +140,10 @@ production:
 	echo "Repository: $$REPO"; \
 	echo "Branch: $(BRANCH_PRODUCTION)"; \
 	echo "Pushed $$(git -C "$$ROOT" rev-parse --short HEAD) to $(GIT_REMOTE)/$(BRANCH_PRODUCTION)."; \
-	ZIPFILE="$(NAME)-$(BRANCH_PRODUCTION)-$$VERSION.zip"; \
+	ZIPFILE="$(NAME)-Production-Professional-$$VERSION.zip"; \
 	rm -f "$$ZIPFILE"; \
 	zip -x@zip_exclude.lst -r "$$ZIPFILE" * >/dev/null; \
-	echo "Built $$ROOT/$$ZIPFILE for upload to PG3."; \
+	echo "Built $$ROOT/$$ZIPFILE (Professional edition artifact)."; \
 	$(MAKE) production-standard
 
 # Standard edition zip: strip Professional marker blocks, py_compile check, zip with extended exclude list.

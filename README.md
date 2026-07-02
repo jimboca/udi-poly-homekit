@@ -55,7 +55,7 @@ That guide covers **DISCOVER**, entering the HomeKit pairing code (use the code 
 - **[PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md)** — Professional device inventory + generic IoX nodes
 - Hub status codes, full parameter tables, and troubleshooting: **[CONFIG.md](CONFIG.md)**
 
-Store builds: **`make production`** produces the Professional zip; **`make production-standard`** produces a Standard zip with Professional-only source stripped.
+Store builds: **`make production`** → `HomeKitHub-Production-Professional-<VERSION>.zip`; **`make production-standard`** → `HomeKitHub-Production-Standard-<VERSION>.zip`.
 
 ## License
 
