@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.10] - 2026-07-03
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Fixed
+
+- **(Professional)** **Repeat thermostat migration on restart:** Only delete/recreate thermostats when PG3 metadata (hint/nls/nodeType) is actually stale — not merely because `thermostat_profile_rev` was unrecorded. Legacy `hkg_*` rows are excluded from stale scans.
+- **(Professional)** **Sensors missing after thermostat recreate:** Re-hydrate sensors only when `poly.getNode()` is live; purge orphan PG3 rows and issue `addnode` so child sensors return to IoX after migration deletes.
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.10** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.9] - 2026-07-03
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

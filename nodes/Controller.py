@@ -2818,11 +2818,19 @@ class Controller(Node):
         if node_def not in self._THERMOSTAT_NODE_DEF_IDS:
             return False
         addr = str(addr or getattr(node, 'address', '') or '').strip()
-        if not addr:
+        if not addr or addr.startswith('hkg_'):
             return False
-        if self._stored_thermostat_profile_rev() < _THERMOSTAT_PROFILE_REV:
-            return True
         return self._thermostat_pg3_metadata_stale(addr, node_def)
+
+    def _pg3_node_live(self, addr: str) -> bool:
+        """True when Polyglot still has a runtime node for *addr* (not just a PG3 DB row)."""
+        addr = str(addr or '').strip()
+        if not addr or not hasattr(self.poly, 'getNode'):
+            return False
+        try:
+            return self.poly.getNode(addr) is not None
+        except Exception:
+            return False
 
     def _pg3_node_meta(self, addr: str) -> Optional[dict]:
         addr = str(addr or '').strip()
@@ -2989,7 +2997,7 @@ class Controller(Node):
             if node_def not in self._THERMOSTAT_NODE_DEF_IDS:
                 continue
             child_addr = str(addr or '').strip()
-            if not child_addr:
+            if not child_addr or child_addr.startswith('hkg_'):
                 continue
             seen.add(child_addr)
             if self._thermostat_pg3_metadata_stale(child_addr, node_def):
@@ -3004,7 +3012,7 @@ class Controller(Node):
                 if node_def not in self._THERMOSTAT_NODE_DEF_IDS:
                     continue
                 addr = str(meta.get('address') or '').strip()
-                if not addr or addr in seen:
+                if not addr or addr in seen or addr.startswith('hkg_'):
                     continue
                 if self._thermostat_pg3_metadata_stale(addr, node_def):
                     return True
@@ -3202,7 +3210,7 @@ class Controller(Node):
             role=str(role or 'sensor'),
             node_def_id=node_def_id,
         )
-        if self._pg3_node_meta(addr) is not None:
+        if self._pg3_node_live(addr):
             LOGGER.info(
                 'Re-hydrating sensor IoX node %s (%s) for %s aid=%s',
                 addr,
@@ -3219,6 +3227,14 @@ class Controller(Node):
                 register_only=register_only,
                 addr=addr,
             )
+        if self._pg3_node_meta(addr) is not None:
+            LOGGER.info(
+                'Purging orphan PG3 sensor row %s before addnode (%s aid=%s)',
+                addr,
+                did,
+                aid,
+            )
+            self._purge_stale_pg3_node(addr, reason='sensor re-add after delete')
         self.add_node(node)
         LOGGER.info('Created sensor IoX node %s (%s) for %s aid=%s', addr, role, did, aid)
         if hasattr(node, 'apply_driver_schema'):
@@ -3339,19 +3355,22 @@ class Controller(Node):
         if not self._sensor_driver_schema_stale(node):
             self._existing_sensor_addnode_retried.add(addr)
             return
-        meta = self._pg3_node_meta(addr)
-        if meta is not None or addr in self._existing_sensor_addnode_retried:
+        if self._pg3_node_live(addr):
             if hasattr(node, 'apply_driver_schema'):
                 node.apply_driver_schema(report=True)
             self._existing_sensor_addnode_retried.add(addr)
             return
+        if addr in self._existing_sensor_addnode_retried:
+            return
+        if self._pg3_node_meta(addr) is not None:
+            self._purge_stale_pg3_node(addr, reason='orphan sensor row')
         self._existing_sensor_addnode_retried.add(addr)
         try:
             if hasattr(node, 'apply_driver_schema'):
                 node.apply_driver_schema(report=False)
             self.add_node(node, wait=True)
             LOGGER.warning(
-                'Sensor %s already existed in PG3; re-sent addnode to IoX (parent=%s)',
+                'Sensor %s re-sent addnode to IoX after delete (parent=%s)',
                 addr,
                 getattr(node, 'primary', '?'),
             )

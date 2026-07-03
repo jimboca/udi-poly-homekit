@@ -306,12 +306,13 @@ def test_thermostat_must_self_parent_ok_when_self_parented():
     assert c._thermostat_must_self_parent(node, 'ge3811269468c9') is False
 
 
-def test_thermostat_profile_stale_when_rev_not_recorded():
+def test_thermostat_profile_fresh_when_rev_not_recorded_and_no_pg3_row():
     c = _bare_controller()
     c.TypedData = FakeTypedData({})
     c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = []
     node = MagicMock(id='HKHubThermostat', address='ge3811269468c9')
-    assert c._thermostat_profile_stale(node, 'ge3811269468c9') is True
+    assert c._thermostat_profile_stale(node, 'ge3811269468c9') is False
 
 
 def test_thermostat_profile_stale_when_pg3_hint_wrong():
@@ -325,7 +326,7 @@ def test_thermostat_profile_stale_when_pg3_hint_wrong():
     assert c._thermostat_profile_stale(node, 'ge3811269468c9') is True
 
 
-def test_thermostat_profile_stale_when_rev_one_but_current_rev_two():
+def test_thermostat_profile_fresh_when_rev_one_but_pg3_metadata_ok():
     c = _bare_controller()
     c.TypedData = FakeTypedData({'thermostat_profile_rev': 1})
     c.poly = MagicMock()
@@ -338,7 +339,7 @@ def test_thermostat_profile_stale_when_rev_one_but_current_rev_two():
         }
     ]
     node = MagicMock(id='HKHubThermostat', address='ge3811269468c9')
-    assert c._thermostat_profile_stale(node, 'ge3811269468c9') is True
+    assert c._thermostat_profile_stale(node, 'ge3811269468c9') is False
 
 
 def test_thermostat_profile_fresh_when_rev_and_hint_ok():
@@ -445,15 +446,13 @@ def test_ensure_fresh_thermostat_pg3_node_deletes_when_pg3_row_stale():
     c = _bare_controller()
     c.TypedData = FakeTypedData({'thermostat_profile_rev': 1})
     c.poly = MagicMock()
-    c.poly.getNodesFromDb.side_effect = [
-        [
-            {
-                'address': 'ge3811269468c9',
-                'nodeDefId': 'HKHubEcobeeThermostat',
-                'nodeType': '140',
-                'hint': '0x010c0100',
-            }
-        ],
+    c.poly.getNodesFromDb.return_value = [
+        {
+            'address': 'ge3811269468c9',
+            'nodeDefId': 'HKHubEcobeeThermostat',
+            'nodeType': '140',
+            'hint': '0x0',
+        }
     ]
     c._delete_thermostat_for_recreation = MagicMock(return_value=True)
     c._ensure_fresh_thermostat_pg3_node(
@@ -464,6 +463,61 @@ def test_ensure_fresh_thermostat_pg3_node_deletes_when_pg3_row_stale():
         '44:be:73:09:47:20',
         reason='140E profile (hint/icon/name)',
     )
+
+
+def test_ensure_fresh_thermostat_pg3_node_skips_when_pg3_row_fresh():
+    c = _bare_controller()
+    c.TypedData = FakeTypedData({'thermostat_profile_rev': 1})
+    c.poly = MagicMock()
+    c.poly.getNodesFromDb.return_value = [
+        {
+            'address': 'ge3811269468c9',
+            'nodeDefId': 'HKHubEcobeeThermostat',
+            'nodeType': '140',
+            'hint': '0x010c0100',
+        }
+    ]
+    c._delete_thermostat_for_recreation = MagicMock(return_value=True)
+    c._ensure_fresh_thermostat_pg3_node(
+        'ge3811269468c9', '44:be:73:09:47:20', 'HKHubEcobeeThermostat'
+    )
+    c._delete_thermostat_for_recreation.assert_not_called()
+
+
+def test_ensure_sensor_node_addnode_when_pg3_ghost_row_only():
+    c = _bare_controller()
+    c.edition = 'Professional'
+    c.is_professional = lambda: True
+    c._generic_nodes = {}
+    c._sensor_by_key = {}
+    c._motion_sensor_by_device = {}
+    c._thermostat_control_aid = {'44:be:73:09:47:20': 2}
+    c._pairing_display_name = lambda _did: 'Ecobee'
+    c._sensor_parent_address = lambda _did: 'ge3811269468c9'
+    c._generic_node_address = lambda did, row: generic_node_address(
+        did, int(row['aid']), str(row['role'])
+    )
+    c._schedule_refresh_generic_node = MagicMock()
+    c._purge_stale_pg3_node = MagicMock()
+    c.add_node = MagicMock(side_effect=lambda node, wait=True: node)
+    c.poly = MagicMock()
+    c.poly.getNode.return_value = None
+    c.poly.db_getNodeDrivers.return_value = []
+    c.poly.getNodesFromDb.return_value = [
+        {'address': 'g4470f9aa21fa7', 'nodeDefId': 'HKHubSensorDry'}
+    ]
+    c.address = 'controller'
+    node = c._ensure_sensor_node(
+        '44:be:73:09:47:20',
+        3,
+        char_bindings={},
+        role='sensor',
+        accessory_name='Master Bedroom',
+        register_only=False,
+    )
+    assert node is not None
+    c._purge_stale_pg3_node.assert_called_once()
+    c.add_node.assert_called_once()
 
 
 def test_pg3_primary_mismatch_when_controller_parent():
