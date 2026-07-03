@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.9] - 2026-07-03
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Fixed
+
+- **(Professional)** **Migration double-delete:** Wait for PG3 to clear after `removenode` before recreating sensors; skip stale-sensor recreate on freshly `addnode`’d nodes; only full delete/recreate when nodedef is wrong (driver uom mismatches use `apply_driver_schema` instead).
+- **(Professional)** **Responding (GV2) after upgrade:** Mark room/motion sensors responding when humidity or temperature arrives; ignore unrelated contact-state characteristics that were clearing GV2 on Ecobee room sensors.
+- **(Professional)** **Faster post-migration fill:** Immediate per-device HAP snapshot after sensor sync, plus staggered refresh after full generic-node resync.
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.9** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.8] - 2026-07-02
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

@@ -657,23 +657,19 @@ def test_dry_sensor_schema_omits_clihum():
     assert 'BATLVL' in keys
 
 
-def test_sensor_driver_schema_stale_wrong_nodedef():
+def test_sensor_nodedef_stale_wrong_nodedef():
     c = _bare_controller()
     c.poly = MagicMock()
-    c.poly.db_getNodeDrivers.return_value = [
-        {'driver': 'ST', 'value': 70, 'uom': 17, 'name': 'Temperature'},
-        {'driver': 'GV1', 'value': 0, 'uom': 25, 'name': 'Occupancy'},
-        {'driver': 'GV2', 'value': 1, 'uom': 2, 'name': 'Responding'},
-        {'driver': 'BATLVL', 'value': 90, 'uom': 51, 'name': 'Battery Level'},
-        {'driver': 'BATLOW', 'value': 0, 'uom': 2, 'name': 'Battery Low'},
-    ]
     node = MagicMock(
-        role='sensor',
+        role='motion_sensor',
         char_bindings={},
-        id='HKHubSensor',
+        id='HKHubMotionSensor',
         address='gsensoraddr02',
     )
-    assert c._sensor_driver_schema_stale(node) is True
+    c._pg3_node_meta = MagicMock(return_value=None)
+    assert c._sensor_nodedef_stale(node) is False
+    c._pg3_node_meta = MagicMock(return_value={'nodeDefId': 'HKHubSensor'})
+    assert c._sensor_nodedef_stale(node) is True
 
 
 def test_refresh_device_generic_nodes_one_snapshot():

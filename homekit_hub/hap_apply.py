@@ -861,9 +861,18 @@ def apply_characteristic_to_sensor(
             return True
         if 'RELATIVE_HUMIDITY' in norm and 'TARGET' not in norm:
             _set_node_driver(node, 'CLIHUM', int(round(float(value))))
+            role = str(getattr(node, 'role', '') or '').strip().lower()
+            if role in ('sensor', 'motion_sensor'):
+                _set_node_driver(node, 'GV2', 1)
             return True
         if is_hap_contact_state_characteristic(characteristic):
-            _set_node_driver(node, 'GV2', hap_contact_state_to_iox(value))
+            bindings = getattr(node, 'char_bindings', {}) or {}
+            role = str(getattr(node, 'role', '') or '').strip().lower()
+            if role == 'binary_sensor' or (
+                isinstance(bindings, dict)
+                and ('CONTACT_SENSOR_STATE' in bindings or 'CONTACT_STATE' in bindings)
+            ):
+                _set_node_driver(node, 'GV2', hap_contact_state_to_iox(value))
             return True
         if 'OCCUPANCY' in norm or 'MOTION_DETECTED' in norm:
             _set_node_driver(node, 'GV1', hap_on_to_iox(value))

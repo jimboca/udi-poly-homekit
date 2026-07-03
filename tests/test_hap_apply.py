@@ -380,6 +380,8 @@ def test_apply_binary_sensor_motion_maps_gv1():
 def test_apply_binary_sensor_contact_maps_gv2():
     node = MagicMock()
     node.use_celsius = False
+    node.role = 'binary_sensor'
+    node.char_bindings = {}
     u = '0000006A-0000-1000-8000-0026BB765291'
     assert apply_characteristic_to_binary_sensor(node, u, 0) is True
     node.set_driver_safe.assert_called_once_with('GV2', 1, report=True)
@@ -408,8 +410,11 @@ def test_apply_sensor_motion_humidity_maps_clihum():
     node = MagicMock()
     node.use_celsius = False
     node.role = 'motion_sensor'
+    node.char_bindings = {}
     assert apply_characteristic_to_sensor(node, 'RELATIVE_HUMIDITY_CURRENT', 42.6) is True
-    node.set_driver_safe.assert_called_with('CLIHUM', 43, report=True)
+    assert node.set_driver_safe.call_count == 2
+    node.set_driver_safe.assert_any_call('CLIHUM', 43, report=True)
+    node.set_driver_safe.assert_any_call('GV2', 1, report=True)
 
 
 def test_apply_sensor_motion_ignores_battery():

@@ -870,6 +870,18 @@ class Controller(Node):
             time.sleep(0.1)
         self.n_queue.pop()
 
+    def _wait_for_pg3_node_gone(self, addr: str, *, timeout_sec: float = 5.0) -> bool:
+        """Best-effort wait until PG3 no longer lists *addr* after removenode."""
+        addr = str(addr or '').strip()
+        if not addr:
+            return True
+        deadline = time.time() + max(0.1, float(timeout_sec))
+        while time.time() < deadline:
+            if self._pg3_node_meta(addr) is None:
+                return True
+            time.sleep(0.05)
+        return self._pg3_node_meta(addr) is None
+
     def _check_asyncio_loop_thread_health(self) -> None:
         """If the asyncio loop thread dies while the hub is ready, surface bridge failure on ISY.
 
@@ -2659,6 +2671,9 @@ class Controller(Node):
             self._sync_generic_nodes(did, classification)
             self._sync_sensor_nodes(did, pairing, classification)
         self._mark_thermostat_profile_rev()
+        if self.is_professional() and self.ready:
+            for i, did in enumerate(sorted(self._current_paired_ids_from_data())):
+                Timer(0.05 + i * 0.15, lambda d=did: self.refresh_device_generic_nodes(d)).start()
 
     async def _classify_device_async(self, device_id: str) -> tuple[str, list, Any]:
         from homekit_hub.device_classifier import classify_accessories
@@ -2690,6 +2705,7 @@ class Controller(Node):
         try:
             if hasattr(self.poly, 'delNode'):
                 self.poly.delNode(addr)
+                self._wait_for_pg3_node_gone(addr)
             elif node is not None and hasattr(self.poly, 'removeNode'):
                 self.poly.removeNode(node.address)
         except Exception:
@@ -3212,12 +3228,12 @@ class Controller(Node):
             self._motion_sensor_by_device[did] = node
         else:
             self._sensor_by_key[key] = node
-        self._retry_existing_sensor_addnode(node, addr)
+        self._existing_sensor_addnode_retried.add(addr)
         self._schedule_refresh_generic_node(node)
         return node
 
-    def _sensor_driver_schema_stale(self, node: Any) -> bool:
-        """True when PG3 nodedef or driver uoms/names differ from the current schema."""
+    def _sensor_nodedef_stale(self, node: Any) -> bool:
+        """True when IoX/PG3 nodedef id differs from the expected sensor profile."""
         role = str(getattr(node, 'role', '') or 'sensor')
         bindings = dict(getattr(node, 'char_bindings', {}) or {})
         expected_nd = expected_sensor_nodedef(role, bindings)
@@ -3230,8 +3246,15 @@ class Controller(Node):
             pg3_nd = str(meta.get('nodeDefId') or '')
             if pg3_nd and pg3_nd != expected_nd:
                 return True
-        if actual_nd and actual_nd != expected_nd:
-            return True
+        return bool(actual_nd and actual_nd != expected_nd)
+
+    def _sensor_driver_schema_stale(self, node: Any) -> bool:
+        """True when PG3 driver uoms/names differ from the current schema."""
+        role = str(getattr(node, 'role', '') or 'sensor')
+        bindings = dict(getattr(node, 'char_bindings', {}) or {})
+        addr = str(getattr(node, 'address', '') or '')
+        if not addr:
+            return False
         schema = SensorNode._drivers_for_role(role, bindings)
         expected = {str(s['driver']): s for s in schema}
         try:
@@ -3310,12 +3333,17 @@ class Controller(Node):
         addr = str(addr or getattr(node, 'address', '') or '').strip()
         if not addr:
             return
+        if self._sensor_nodedef_stale(node):
+            self._recreate_stale_sensor_node(node, addr)
+            return
         if not self._sensor_driver_schema_stale(node):
             self._existing_sensor_addnode_retried.add(addr)
             return
         meta = self._pg3_node_meta(addr)
         if meta is not None or addr in self._existing_sensor_addnode_retried:
-            self._recreate_stale_sensor_node(node, addr)
+            if hasattr(node, 'apply_driver_schema'):
+                node.apply_driver_schema(report=True)
+            self._existing_sensor_addnode_retried.add(addr)
             return
         self._existing_sensor_addnode_retried.add(addr)
         try:
@@ -3330,8 +3358,8 @@ class Controller(Node):
         except Exception:
             LOGGER.debug('Sensor %s addnode retry failed', addr, exc_info=True)
             return
-        if self._sensor_driver_schema_stale(node):
-            self._recreate_stale_sensor_node(node, addr)
+        if self._sensor_driver_schema_stale(node) and hasattr(node, 'apply_driver_schema'):
+            node.apply_driver_schema(report=True)
 
     def _ensure_builtin_motion_sensor(
         self,
@@ -3510,6 +3538,7 @@ class Controller(Node):
                 )
                 if legacy_addr in self._generic_nodes:
                     self._delete_generic_node_by_address(legacy_addr)
+        self.refresh_device_generic_nodes(did)
 
     def _remove_sensor_nodes_for_device(self, device_id: str) -> None:
         did = str(device_id or '').strip().lower()
