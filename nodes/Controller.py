@@ -25,7 +25,7 @@ from homekit_hub import (
     mqtt_transport_enabled,
     normalize_hap_pin,
 )
-from homekit_hub.bridge import _parse_slot_value
+from homekit_hub.bridge import TYPED_DISCOVER_NETWORKS_KEY, _parse_slot_value
 
 from nodes import VERSION
 from .PairedDeviceNode import PairedDeviceNode
@@ -292,6 +292,23 @@ class Controller(Node):
                         },
                     ],
                 },
+                {
+                    "name": TYPED_DISCOVER_NETWORKS_KEY,
+                    "title": "Extra Discovery Networks",
+                    "desc": (
+                        "Optional extra LAN/VLAN subnets for HomeKit mDNS (DISCOVER). "
+                        "Same idea as udi-poly-kasa: add a row per IoT network when accessories "
+                        "are not on the Polisy primary interface."
+                    ),
+                    "isList": True,
+                    "params": [
+                        {
+                            "name": "address",
+                            "title": "Broadcast address (e.g. 192.168.222.255) or this host's IP on that VLAN",
+                            "isRequired": True,
+                        },
+                    ],
+                },
             ],
             True,
         )
@@ -309,7 +326,29 @@ class Controller(Node):
         for k, v in raw.items():
             if k not in out:
                 out[k] = v
+        out["_discover_networks"] = self._bridge_get_discover_network_rows()
+        out["_primary_network_broadcast"] = self._primary_network_broadcast()
         return out
+
+    def _primary_network_broadcast(self) -> Optional[str]:
+        try:
+            ni = self.poly.network_interface
+            if isinstance(ni, dict):
+                bc = ni.get("broadcast")
+                if bc:
+                    return str(bc).strip()
+        except Exception:
+            LOGGER.debug("network_interface broadcast unavailable", exc_info=True)
+        return None
+
+    def _bridge_get_discover_network_rows(self) -> list:
+        try:
+            rows = self.TypedData.get(TYPED_DISCOVER_NETWORKS_KEY)
+        except Exception:
+            return []
+        if not isinstance(rows, list):
+            return []
+        return rows
 
     def _bridge_get_pairing_slot_rows(self) -> list:
         try:
@@ -595,6 +634,9 @@ class Controller(Node):
             snap[k] = p.get(k)
         rows = self._bridge_get_pairing_slot_rows()
         snap["_pairing_slots"] = json.dumps(rows, sort_keys=True, default=str)
+        snap["_discover_networks"] = json.dumps(
+            self._bridge_get_discover_network_rows(), sort_keys=True, default=str
+        )
         return snap
 
     def _maybe_restart_on_config_change(self) -> None:
@@ -611,6 +653,7 @@ class Controller(Node):
             or snap.get("zeroconf_unicast") != prev.get("zeroconf_unicast")
             or snap.get("zeroconf_interfaces") != prev.get("zeroconf_interfaces")
             or snap.get("zeroconf_ip_version") != prev.get("zeroconf_ip_version")
+            or snap.get("_discover_networks") != prev.get("_discover_networks")
         )
         pairing_changed = snap.get("_pairing_slots") != prev.get("_pairing_slots")
         mqtt_changed = any(snap.get(k) != prev.get(k) for k in _BRIDGE_MQTT_RESTART_KEYS)

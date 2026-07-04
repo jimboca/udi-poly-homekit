@@ -121,6 +121,8 @@ class MqttClientSession:
 
     slug: str
 TYPED_PAIRING_SLOTS_KEY = "pairing_slots"
+# Same key as udi-poly-kasa: extra LAN/VLAN rows for mDNS bind (see CONFIG.md).
+TYPED_DISCOVER_NETWORKS_KEY = "networks"
 DATA_KEY_PAIRINGS = "homekit_pairings"
 # Last HAP discover snapshot (for UI; written by discover_collect)
 DATA_KEY_LAST_HAP_DISCOVER = "last_hap_discover"
@@ -154,6 +156,119 @@ def _package_version(dist_name: str) -> str:
         return str(version(dist_name))
     except Exception:
         return ""
+
+
+def _ipv4_quads(addr: str) -> tuple[int, int, int, int] | None:
+    parts = str(addr or "").strip().split(".")
+    if len(parts) != 4:
+        return None
+    try:
+        quads = tuple(int(p) for p in parts)
+    except ValueError:
+        return None
+    if any(q < 0 or q > 255 for q in quads):
+        return None
+    return quads
+
+
+def normalize_discover_network_address(
+    address: str,
+    log: logging.Logger | None = None,
+) -> str | None:
+    """Return an IPv4 subnet hint for mDNS interface bind (Kasa-compatible).
+
+    Accepts broadcast (``192.168.222.255``), gateway/host (``192.168.222.1``), or the
+    Polisy interface IP on that VLAN (``192.168.222.10``). Non-``255`` host addresses
+    are kept as-is so route lookup can resolve the local bind IP.
+    """
+    address = str(address or "").strip()
+    if not address:
+        return None
+    quads = _ipv4_quads(address)
+    if quads is None:
+        return address
+    if quads[3] == 255:
+        return address
+    broadcast = ".".join(str(q) for q in (*quads[:3], 255))
+    if log is not None:
+        log.debug(
+            "Discover network %s is not a broadcast address; using %s for subnet hint",
+            address,
+            broadcast,
+        )
+    return broadcast
+
+
+def local_ip_for_discover_network(
+    hint: str,
+    log: logging.Logger | None = None,
+) -> str | None:
+    """Resolve the local IPv4 address to bind for mDNS on ``hint``'s subnet."""
+    hint = str(hint or "").strip()
+    if not hint:
+        return None
+    quads = _ipv4_quads(hint)
+    if quads is None:
+        if log is not None:
+            log.warning("Discover network %r is not an IPv4 address", hint)
+        return None
+    probe = ".".join(str(q) for q in (*quads[:3], 1)) if quads[3] == 255 else hint
+    sock: socket.socket | None = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(0.5)
+        sock.connect((probe, 9))
+        local = sock.getsockname()[0]
+        if quads[3] != 255 and local != hint:
+            # Operator entered a specific host IP; bind that address when routable.
+            return hint
+        return local
+    except OSError as ex:
+        if log is not None:
+            log.warning(
+                "Could not resolve local interface for discover network %s (probe %s): %s",
+                hint,
+                probe,
+                ex,
+            )
+        return None
+    finally:
+        if sock is not None:
+            sock.close()
+
+
+def resolve_zeroconf_interface_ips(
+    params: dict[str, Any] | None,
+    log: logging.Logger | None = None,
+) -> list[str]:
+    """Build explicit zeroconf ``interfaces=[...]`` IPs from typed discover-network rows."""
+    if not params:
+        return []
+    rows = params.get("_discover_networks")
+    if not isinstance(rows, list) or not rows:
+        return []
+    targets: list[str] = []
+    seen: set[str] = set()
+
+    def add_hint(raw: Any) -> None:
+        hint = normalize_discover_network_address(str(raw or "").strip(), log)
+        if not hint:
+            return
+        ip = local_ip_for_discover_network(hint, log)
+        if not ip or ip in seen:
+            return
+        seen.add(ip)
+        targets.append(ip)
+
+    primary = params.get("_primary_network_broadcast")
+    if primary:
+        add_hint(primary)
+
+    for row in rows:
+        if isinstance(row, dict):
+            add_hint(row.get("address"))
+
+    return targets
 
 
 def probe_mdns_port_5353() -> str:
@@ -237,6 +352,14 @@ def _zeroconf_ctor_kwargs(
                 "zeroconf unicast: IPVersion.V4Only on %s (reduce errno 49)",
                 sys.platform,
             )
+
+    iface_ips = resolve_zeroconf_interface_ips(params, log)
+    if iface_ips:
+        out["interfaces"] = iface_ips
+        log.info(
+            "zeroconf: explicit interface IP bind(s) for DISCOVER/mDNS: %s",
+            ", ".join(iface_ips),
+        )
     return out
 
 
@@ -1997,6 +2120,11 @@ class HomeKitHubBridge:
                     transports[str(name)] = len(d)
             except (AttributeError, TypeError):
                 pass
+        params = self._get_params()
+        iface_ips = resolve_zeroconf_interface_ips(params, self.log)
+        discover_rows = params.get("_discover_networks")
+        if not isinstance(discover_rows, list):
+            discover_rows = []
         return {
             "hub_running": self._running,
             "zeroconf_mode": getattr(zcm, "mode_label", "") if zcm else "",
@@ -2004,6 +2132,8 @@ class HomeKitHubBridge:
             "hap_browser_count": len(zcm.hap_browsers) if zcm else 0,
             "hap_browser_types": [HAP_TYPE_TCP, HAP_TYPE_UDP],
             "mdns_5353_probe": probe_mdns_port_5353(),
+            "discover_network_rows": len(discover_rows),
+            "zeroconf_interface_ips": iface_ips,
             "transports_discovery_counts": transports,
             "platform": sys.platform,
             "python_version": sys.version.split()[0],

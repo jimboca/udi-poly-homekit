@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.11] - 2026-07-04
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Added
+
+- **(Standard + Professional)** **Extra Discovery Networks** typed list (`networks`, same pattern as **udi-poly-kasa**): bind mDNS to additional LAN/VLAN subnets when HomeKit accessories are not on the Polisy primary interface. **ZEROCONF_DIAG** reports resolved `zeroconf_interface_ips`.
+
+### Changed
+
+- **(Standard + Professional)** **CONFIG.md** — quick pairing and troubleshooting cover IoT VLAN / broadcast setup before **DISCOVER**.
+- **(Standard + Professional)** Version **2.0.11** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.10] - 2026-07-03
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

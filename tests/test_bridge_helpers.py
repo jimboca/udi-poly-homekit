@@ -30,6 +30,9 @@ from homekit_hub.bridge import (
     _resolve_filters_from_last_discover,
     _row_pin_and_filters,
     _zeroconf_ctor_kwargs,
+    local_ip_for_discover_network,
+    normalize_discover_network_address,
+    resolve_zeroconf_interface_ips,
 )
 
 
@@ -237,6 +240,48 @@ def test_zeroconf_ctor_kwargs_env_wins_params(monkeypatch):
     params = {"zeroconf_interfaces": "default"}
     kw = _zeroconf_ctor_kwargs(log, unicast=False, params=params)
     assert kw["interfaces"] is InterfaceChoice.All
+
+
+def test_normalize_discover_network_address_broadcast_and_host():
+    log = logging.getLogger("discover-net")
+    assert normalize_discover_network_address("192.168.222.255", log) == "192.168.222.255"
+    assert normalize_discover_network_address("192.168.222.1", log) == "192.168.222.255"
+    assert normalize_discover_network_address("192.168.222.10", log) == "192.168.222.255"
+
+
+def test_resolve_zeroconf_interface_ips_from_rows(monkeypatch):
+    log = logging.getLogger("discover-net")
+    params = {
+        "_primary_network_broadcast": "192.168.1.255",
+        "_discover_networks": [{"address": "192.168.222.255"}, {"address": "192.168.50.1"}],
+    }
+    monkeypatch.setattr(
+        "homekit_hub.bridge.local_ip_for_discover_network",
+        lambda hint, _log=None: {
+            "192.168.1.255": "192.168.1.5",
+            "192.168.222.255": "192.168.222.10",
+            "192.168.50.255": "192.168.50.2",
+        }.get(hint),
+    )
+    assert resolve_zeroconf_interface_ips(params, log) == [
+        "192.168.1.5",
+        "192.168.222.10",
+        "192.168.50.2",
+    ]
+
+
+def test_zeroconf_ctor_kwargs_uses_explicit_interface_ips(monkeypatch):
+    log = logging.getLogger("zc")
+    monkeypatch.delenv("HOMEKIT_HUB_ZEROCONF_INTERFACES", raising=False)
+    monkeypatch.delenv("HOMEKIT_HUB_ZEROCONF_IP_VERSION", raising=False)
+    monkeypatch.setattr("homekit_hub.bridge.sys.platform", "freebsd14")
+    monkeypatch.setattr(
+        "homekit_hub.bridge.resolve_zeroconf_interface_ips",
+        lambda _params, _log=None: ["192.168.222.10"],
+    )
+    kw = _zeroconf_ctor_kwargs(log, unicast=True, params={"_discover_networks": []})
+    assert kw["interfaces"] == ["192.168.222.10"]
+    assert kw["ip_version"] is IPVersion.V4Only
 
 
 @pytest.mark.parametrize(

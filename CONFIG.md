@@ -24,10 +24,13 @@ Applies to **Standard** and **Professional**. **No iPhone, iPad, Mac, or Apple H
 
 1. Add **HomeKit Hub** from the PG3 store and start the Node Server.
 2. Put the accessory in **HomeKit pairing mode** (see vendor docs). Confirm it is **unpaired** from Apple Home and other controllers.
-3. On the **HomeKit Hub** controller node, run **DISCOVER**.  PG3 will show Notices about what is happening and what it found.
-4. Open **Configuration** → **Custom Typed Configuration Parameters** → **HomeKit pairing slots**. **Reload the Configuration page in your browser** if the new row does not appear yet (the table refresh button alone may not be enough).
-5. Find the row for your device (id and name are filled in by **DISCOVER**). In **HomeKit pairing code** (`hap_pin`), enter the **8-digit code currently shown on the accessory** while it is in pairing mode (`12345678` or `123-45-678` — either format works). **Save**.
-6. Wait for pairing to finish. A **Paired HomeKit device** child node should appear; **ST** should show paired/connected. Check PG3 **Notices** or `logs/debug.log` if pairing fails.
+3. **IoT / separate VLAN (optional):** if accessories are **not** on the Polisy primary LAN (common for Ecobee on a dedicated IoT Wi‑Fi), open **Configuration** → **Custom Typed Configuration Parameters** → **Extra Discovery Networks** and **add row** with that subnet’s **broadcast address** (e.g. `192.168.222.255`), gateway (e.g. `192.168.222.1`), or this host’s IP on that VLAN (e.g. `192.168.222.10`). Same pattern as **udi-poly-kasa**. **Save** — the hub restarts mDNS. Run **ZEROCONF_DIAG** and confirm the notice lists expected `zeroconf_interface_ips` before **DISCOVER**. Skip this on typical single-LAN installs.
+4. On the **HomeKit Hub** controller node, run **DISCOVER**. PG3 will show Notices about what is happening and what it found.
+5. Open **Configuration** → **Custom Typed Configuration Parameters** → **HomeKit pairing slots**. **Reload the Configuration page in your browser** if the new row does not appear yet (the table refresh button alone may not be enough).
+6. Find the row for your device (id and name are filled in by **DISCOVER**). In **HomeKit pairing code** (`hap_pin`), enter the **8-digit code currently shown on the accessory** while it is in pairing mode (`12345678` or `123-45-678` — either format works). **Save**.
+7. Wait for pairing to finish. A **Paired HomeKit device** child node should appear; **ST** should show paired/connected. Check PG3 **Notices** or `logs/debug.log` if pairing fails.
+
+**Order matters:** run **DISCOVER** before entering **hap_pin** so id/name are prefilled. If you already typed a PIN, clear it, run **DISCOVER** with the device in pairing mode, then re-enter the current code.
 
 ### Pairing code can change
 
@@ -124,6 +127,7 @@ This hub flow has been tested primarily with **Ecobee thermostats**. Other HomeK
 - Complete **[Pairing accessories](#pairing-accessories)** for each Ecobee **before** installing **udi-poly-ecobee**.
 - **Critical:** the Ecobee must **not** be in **Apple Home** while you pair here. Remove it from Apple Home first if needed.
 - Ecobee may prompt you to add the thermostat to Apple Home during setup — **skip that** for this integration.
+- If the Ecobee is on a **separate IoT VLAN**, add that subnet under **Extra Discovery Networks** (see [Quick pairing](#quick-pairing-discover) step 3) before **DISCOVER**.
 
 ### After pairing on the hub
 
@@ -153,6 +157,16 @@ Most users never change these. Only touch them when you have a specific reason (
 ## Troubleshooting
 
 See **[DEBUGGING.md](DEBUGGING.md)** for step-by-step diagnosis (hub not ready, **Discover** with no rows, LAN/mDNS, Ecobee pairing, logs, and support checklist).
+
+### DISCOVER finds no accessories (empty pairing row)
+
+Symptoms: **DISCOVER** completes but Notices say **no accessories found**; typed **HomeKit pairing slots** stay empty or only show a manual row without id/name.
+
+1. Confirm the accessory is in **HomeKit pairing mode** and **unpaired** from Apple Home.
+2. Confirm Polisy and the accessory are on the **same routable LAN** (or add the IoT subnet under **Extra Discovery Networks** — see [Quick pairing](#quick-pairing-discover) step 3).
+3. Run **ZEROCONF_DIAG**; check `zeroconf_interface_ips` when extra networks are configured.
+4. If still empty, try Custom Params **`zeroconf_interfaces=all`** or **`zeroconf_unicast=auto`**, save, wait for bridge restart, then **DISCOVER** again.
+5. Enter **hap_pin** only **after** a successful **DISCOVER** prefilled id/name (or type **accessory_id** / **accessory_name** manually on a manual row).
 
 ### Accessory shows "already paired"
 
@@ -256,6 +270,18 @@ In the Polyglot UI, open **Custom Typed Configuration Parameters** and use the l
 
 - No fixed maximum number of rows.
 - If you removed a row by mistake, run **DISCOVER** again to repopulate.
+
+### Extra Discovery Networks (`networks`)
+
+Same pattern as **udi-poly-kasa**. Use when HomeKit accessories live on a **different LAN/VLAN** than the Polisy primary interface (common for IoT Wi‑Fi). Each row is one subnet; the hub binds mDNS to the matching local interface IP before **DISCOVER** and pairing.
+
+| Field | Description |
+|-------|-------------|
+| **Broadcast address** (`address`) | Subnet broadcast (e.g. `192.168.222.255`), gateway (e.g. `192.168.222.1`), or this host's IP on that VLAN (e.g. `192.168.222.10`). |
+
+- Leave empty on typical single-LAN installs.
+- After adding or changing rows, **Save** typed configuration; the hub restarts mDNS automatically.
+- Run **ZEROCONF_DIAG** to confirm `zeroconf_interface_ips` lists the expected addresses.
 
 ### Persisted custom data
 
