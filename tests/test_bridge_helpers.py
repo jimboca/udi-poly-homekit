@@ -30,7 +30,6 @@ from homekit_hub.bridge import (
     _resolve_filters_from_last_discover,
     _row_pin_and_filters,
     _zeroconf_ctor_kwargs,
-    local_ip_for_discover_network,
     normalize_discover_network_address,
     resolve_zeroconf_interface_ips,
 )

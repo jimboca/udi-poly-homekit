@@ -57,7 +57,7 @@ Open the **HomeKit Hub** Node Server in Polyglot and read **Notices**. Important
 | **HomeKit discover scan failed** | Network/mDNS scan error |
 | **HomeKit pairing failed** / **pairing code rejected** | Wrong or expired code, or device not in pairing mode |
 | **HomeKit pairing success** | Pairing completed (transient notice) |
-| **Zeroconf diagnostic** | Output of **Zeroconf diagnostic** command |
+| **Zeroconf diagnostic** | Output of **Zeroconf diagnostic** command — includes `zeroconf_interface_ips` and `discover_network_rows` when **Extra Discovery Networks** are configured |
 
 Notices are cleared when the Node Server restarts.
 
@@ -88,7 +88,7 @@ On startup and whenever Custom Params / Custom Data / Custom Typed configuration
 | **`persistent/hub_config_debug.txt`** | Full latest snapshot (pairing codes and passwords are **not** stored in plain text) |
 | **`logs/debug.log`** | Same content, one line per row prefixed with **`CONFIG `** (grep for `CONFIG` or `configuration snapshot`) |
 
-The report includes runtime flags (handler readiness, edition, paired device ids), merged Custom Params, typed pairing rows (with friendly labels), and summarized custom data (pairing slot keys, last DISCOVER preview). Use it when escalating pairing or MQTT issues without pasting secrets into chat.
+The report includes runtime flags (handler readiness, edition, paired device ids), merged Custom Params, typed pairing rows (with friendly labels), **Extra Discovery Networks** rows (when configured), and summarized custom data (pairing slot keys, last DISCOVER preview). Use it when escalating pairing or MQTT issues without pasting secrets into chat.
 
 **Download Log Package** includes `persistent/` when present.
 
@@ -140,13 +140,25 @@ An empty list is normal until **Discover** finds a device or you click **Add row
 
 Check:
 
-- Accessory and Polisy/eISY are on the **same subnet** (no guest Wi‑Fi, no AP client isolation).
+- Accessory and Polisy/eISY are on the **same routable LAN** (no guest Wi‑Fi, no AP client isolation) **or** the IoT subnet is listed under **Extra Discovery Networks** (see below).
 - Accessory is **actively in HomeKit pairing mode** during the scan (codes expire when that screen closes).
 - Run **Discover** while the pairing code is still on the device screen; wait for the full scan window.
 - If the device still does not appear, **remove power** (unplug or breaker off), wait **10–30 seconds**, restore power, re-enter pairing mode, wait **30–60 seconds**, then **Discover** again.
-- Run **Zeroconf diagnostic** on the controller and read the Notice.
+- Run **Zeroconf diagnostic** on the controller and read the Notice. When extra networks are configured, confirm **`zeroconf_interface_ips`** lists the expected local addresses (primary Polisy interface plus each IoT VLAN).
 
 If the **HomeKit discover** Notice says **no accessories found**, this is a network/mDNS issue, not a UI bug.
+
+##### IoT / separate VLAN — Extra Discovery Networks
+
+Use this when accessories live on a **different subnet** than the Polisy primary interface (common for Ecobee on dedicated IoT Wi‑Fi). Same pattern as **udi-poly-kasa**.
+
+1. Open **Configuration → Custom Typed Configuration Parameters → Extra Discovery Networks**.
+2. **Add row** with that subnet's **broadcast address** (e.g. `192.168.222.255`), **gateway** (e.g. `192.168.222.1`), or **this host's IP** on that VLAN (e.g. `192.168.222.10`).
+3. **Save** — the hub restarts mDNS on the primary interface **plus** each configured subnet.
+4. Run **Zeroconf diagnostic**. The Notice should list your IoT address in **`zeroconf_interface_ips`**. If it is missing, the subnet hint did not resolve to a local interface — check routing, firewall/mDNS rules between VLANs, and the address format.
+5. Run **Discover** again while the accessory is in pairing mode.
+
+Leave **Extra Discovery Networks** empty on typical single-LAN installs (default zeroconf behavior is unchanged). Full parameter reference: [CONFIG.md — Extra Discovery Networks](CONFIG.md#extra-discovery-networks-networks).
 
 **Power-cycle the accessory:** if **Discover** still finds nothing after checking the list above, remove power from the device (unplug or switch off the circuit), wait **10–30 seconds**, power it back on, put it in **HomeKit pairing mode** again, wait **30–60 seconds** for it to advertise on the LAN, then run **Discover** once more. A cold reboot often clears a stuck mDNS advertisement or pairing-mode state that a soft reset does not fix.
 
@@ -221,7 +233,7 @@ Symptoms: **Discover** Notice lists the device under **Already paired elsewhere*
 
 On Polisy/eISY, leave **`zeroconf_unicast`** at default **`on`** unless support directs otherwise. See [CONFIG.md — zeroconf parameters](CONFIG.md#reference-custom-configuration-parameters).
 
-Run **Zeroconf diagnostic** and include the Notice when asking for help.
+Run **Zeroconf diagnostic** and include the Notice when asking for help. When **Extra Discovery Networks** are configured, the Notice includes **`discover_network_rows`** (what you saved) and **`zeroconf_interface_ips`** (what the hub actually bound for mDNS).
 
 Other failures:
 
@@ -294,13 +306,14 @@ All values shown on the controller as **Hub error code**:
 
 1. Install/start **HomeKit Hub** (not HomeKit Bridge).
 2. Wait for **NodeServer Online** = **Connected**, **Bridge Status** = **Running**, log shows **`HomeKit Hub ready`**.
-3. On Ecobee: **Settings → Enable HomeKit pairing** (keep screen open). **Do not** add to Apple Home.
-4. On **HomeKit Hub** controller: **Discover**.
-5. Read **Notices** → **HomeKit discover**.
-6. Reload the full **Configuration** page → **HomeKit pairing slots**.
-7. Enter **HomeKit pairing code** → **Save**.
-8. Confirm **Paired HomeKit device** child appears with **Paired status** = **Paired**.
-9. Install **udi-poly-ecobee** (see its CONFIG.md).
+3. **IoT / separate VLAN only:** if the Ecobee is not on the Polisy primary LAN, add that subnet under **Extra Discovery Networks**, **Save**, run **Zeroconf diagnostic** to confirm **`zeroconf_interface_ips`**, then continue.
+4. On Ecobee: **Settings → Enable HomeKit pairing** (keep screen open). **Do not** add to Apple Home.
+5. On **HomeKit Hub** controller: **Discover**.
+6. Read **Notices** → **HomeKit discover**.
+7. Reload the full **Configuration** page → **HomeKit pairing slots**.
+8. Enter **HomeKit pairing code** → **Save** (run **Discover** before entering the PIN so id/name are prefilled).
+9. Confirm **Paired HomeKit device** child appears with **Paired status** = **Paired**.
+10. Install **udi-poly-ecobee** (see its CONFIG.md).
 
 ---
 
@@ -311,6 +324,7 @@ All values shown on the controller as **Hub error code**:
 3. Full text of PG3 **Notices** after **Discover** and after Save.
 4. **Download Log Package** from the Node Server page in Polyglot — PM this file to the plugin author (preferred over copying log excerpts by hand).
 5. Accessory model, how it was unpaired from any prior controller, and whether an Apple Home hub was ever used (not required for this hub, but relevant if the device was paired to Apple Home via iPhone).
+6. Network layout: single LAN vs IoT VLAN; **Extra Discovery Networks** rows (if any); output of **Zeroconf diagnostic** (`zeroconf_interface_ips`, `discover_network_rows`).
 
 ---
 
