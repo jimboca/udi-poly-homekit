@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.14] - 2026-07-05
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Added
+
+- **(Standard + Professional)** **Empty DISCOVER recovery** — when a manual scan finds no accessories, run up to two ephemeral alternate-bind probes (`zeroconf_unicast=auto`, `zeroconf_interfaces=all`); on success, auto-save winning `zeroconf_*` Custom Params and restart the bridge.
+- **(Standard + Professional)** **`discover_bridge_restart` Notice** — phase-aware progress during probes and a dedicated notice explaining the 1–2 minute bridge restart after params are saved; cleared when restart completes.
+- **(Standard + Professional)** **Attempt history in DISCOVER Notices** — compact probe/scan history and network hints in `hap_discover` when recovery runs.
+
+### Changed
+
+- **(Standard + Professional)** **Zeroconf diagnostics during DISCOVER** — logged to `logs/debug.log` after each failed attempt; not embedded in DISCOVER Notices (use **ZEROCONF_DIAG** for full JSON in Notices).
+- **(Standard + Professional)** **DEBUGGING.md** — documents log-only zeroconf diag during DISCOVER, probe recovery, and bridge-restart notices.
+- **(Standard + Professional)** Version **2.0.14** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.13] - 2026-07-05
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

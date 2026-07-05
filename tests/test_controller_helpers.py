@@ -5,7 +5,11 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 
-from homekit_hub.bridge import DATA_KEY_LAST_HAP_DISCOVER, TYPED_PAIRING_SLOTS_KEY
+from homekit_hub.bridge import (
+    DATA_KEY_DISCOVER_ZEROCONF_AUTO_APPLIED,
+    DATA_KEY_LAST_HAP_DISCOVER,
+    TYPED_PAIRING_SLOTS_KEY,
+)
 from node_funcs import generic_node_address
 from nodes.Controller import (
     ERR_ASYNC_LOOP_DEAD,
@@ -39,6 +43,7 @@ class FakeTypedData:
 class FakeData:
     def __init__(self, d: dict | None = None):
         self._d = dict(d or {})
+        self.loads: list[tuple[dict, bool]] = []
 
     def get(self, key, default=None):
         return self._d.get(key, default)
@@ -46,10 +51,21 @@ class FakeData:
     def __setitem__(self, key, value):
         self._d[key] = value
 
+    def keys(self):
+        return self._d.keys()
+
+    def __getitem__(self, key):
+        return self._d[key]
+
+    def load(self, data, save=True):
+        self.loads.append((dict(data), save))
+        self._d = dict(data)
+
 
 class FakeParams:
     def __init__(self, d: dict | None = None):
         self._d = dict(d or {})
+        self.loads: list[tuple[dict, bool]] = []
 
     def get(self, key, default=None):
         return self._d.get(key, default)
@@ -68,6 +84,10 @@ class FakeParams:
 
     def delete(self, key):
         self._d.pop(key, None)
+
+    def load(self, data, save=True):
+        self.loads.append((dict(data), save))
+        self._d = dict(data)
 
 
 def _bare_controller():
@@ -868,3 +888,47 @@ def test_inventory_notice_only_on_manual_export():
     c.Notices.__setitem__.assert_not_called()
     c._inventory_export_notice_callback('aa:bb', '/tmp/x.json', 'manual_export')
     c.Notices.__setitem__.assert_called_once()
+
+
+def test_persist_zeroconf_probe_params_merges_only_zeroconf_keys():
+    c = _bare_controller()
+    c.Params = FakeParams({"ws_host": "127.0.0.1", "zeroconf_unicast": "on"})
+    c.Data = FakeData({})
+    c.Notices = MagicMock()
+    c._discover_restart_notice_pending = False
+    c._maybe_restart_on_config_change = MagicMock()
+    c._persist_zeroconf_probe_params({"zeroconf_interfaces": "all"})
+    assert c.Params.get("zeroconf_interfaces") == "all"
+    assert c.Params.get("ws_host") == "127.0.0.1"
+    assert c.Params.loads and c.Params.loads[0][1] is True
+    assert DATA_KEY_DISCOVER_ZEROCONF_AUTO_APPLIED in c.Data._d
+    assert c._discover_restart_notice_pending is True
+    c.Notices.__setitem__.assert_called()
+    c._maybe_restart_on_config_change.assert_called_once()
+
+
+def test_discover_progress_notice_includes_phase():
+    c = _bare_controller()
+    c.Notices = {}
+    c._set_discover_progress_notice(
+        5,
+        phase="HomeKit DISCOVER — primary scan",
+        detail="Listening for mDNS.",
+    )
+    assert "primary scan" in c.Notices["discover_progress"]
+    assert "5" in c.Notices["discover_progress"]
+
+
+def test_on_full_restart_done_clears_discover_bridge_restart_notice():
+    c = _bare_controller()
+    c._discover_restart_notice_pending = True
+    c.Notices = {"discover_bridge_restart": "pending", "hap_discover": "results"}
+    c.setDriver = MagicMock()
+    c._sync_mqtt_status_driver_from_params = MagicMock()
+    fut = MagicMock()
+    fut.result.return_value = None
+    c._on_full_restart_done(fut)
+    assert c._discover_restart_notice_pending is False
+    assert "discover_bridge_restart" not in c.Notices
+    assert "Bridge restart complete" in c.Notices["hap_discover"]
+

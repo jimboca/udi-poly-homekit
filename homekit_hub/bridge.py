@@ -126,6 +126,8 @@ TYPED_DISCOVER_NETWORKS_KEY = "networks"
 DATA_KEY_PAIRINGS = "homekit_pairings"
 # Last HAP discover snapshot (for UI; written by discover_collect)
 DATA_KEY_LAST_HAP_DISCOVER = "last_hap_discover"
+# Written when DISCOVER auto-persists zeroconf params from a successful ephemeral probe.
+DATA_KEY_DISCOVER_ZEROCONF_AUTO_APPLIED = "discover_zeroconf_auto_applied"
 HAP_TYPE_TCP = "_hap._tcp.local."
 HAP_TYPE_UDP = "_hap._udp.local."
 
@@ -521,6 +523,231 @@ def discover_network_hints(
         )
 
     return hints
+
+
+def format_discover_probe_override_label(override: dict[str, str]) -> str:
+    """Human-readable label for an ephemeral probe override dict."""
+    parts = [f"{k}={v}" for k, v in sorted(override.items())]
+    return ", ".join(parts) if parts else "(none)"
+
+
+def ephemeral_discover_probe_overrides(
+    params: dict[str, Any] | None,
+    diag: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Return 0–2 in-memory zeroconf override dicts to try when primary DISCOVER is empty."""
+    if not params:
+        params = {}
+    ic = str(params.get("zeroconf_interfaces") or "").strip().lower()
+    unicast_pol = _param_unicast_policy(params)
+    bind_source = str(diag.get("zeroconf_interface_bind_source") or "none")
+    platform = str(diag.get("platform") or "")
+    bsdish = platform.startswith(("freebsd", "darwin"))
+
+    if unicast_pol == "auto" and ic == "all":
+        return []
+
+    overrides: list[dict[str, str]] = []
+    if ic != "all" and bsdish and bind_source in (
+        "auto_primary",
+        "auto_primary_outbound",
+        "none",
+    ):
+        overrides.append({"zeroconf_interfaces": "all"})
+    if unicast_pol == "off":
+        overrides.append({"zeroconf_unicast": "auto"})
+    return overrides[:2]
+
+
+def discover_probe_hints(
+    attempt_history: list[dict[str, Any]],
+    *,
+    auto_applied_override: dict[str, str] | None = None,
+) -> list[str]:
+    """Hints from ephemeral DISCOVER probe attempt history."""
+    hints: list[str] = []
+    if auto_applied_override:
+        hints.append(
+            "Alternate bind probe succeeded; saved Custom Param(s): "
+            f"{format_discover_probe_override_label(auto_applied_override)}. "
+            "The bridge is restarting to apply them permanently."
+        )
+        return hints
+    if not attempt_history:
+        return hints
+    for entry in attempt_history:
+        label = str(entry.get("label") or entry.get("context") or "attempt")
+        n = int(entry.get("accessories_found") or 0)
+        if n:
+            hints.append(f"{label}: found {n} accessory(ies).")
+        elif entry.get("probe_error"):
+            hints.append(f"{label}: probe error ({entry.get('probe_error')}).")
+        else:
+            hints.append(f"{label}: no accessories in scan window.")
+    if all(int(e.get("accessories_found") or 0) == 0 for e in attempt_history):
+        hints.append(
+            "All discover attempts (primary and alternate-bind probes) found zero accessories. "
+            "If bind settings look healthy, confirm pairing mode, same LAN/VLAN, and mDNS not blocked."
+        )
+    return hints
+
+
+def format_discover_attempt_history_html(attempt_history: list[dict[str, Any]]) -> str:
+    """HTML block listing DISCOVER primary + probe attempts."""
+    if not attempt_history:
+        return ""
+    parts = ["<b>Discover attempt history:</b><ul>"]
+    for entry in attempt_history:
+        label = str(entry.get("label") or entry.get("context") or "attempt")
+        n = int(entry.get("accessories_found") or 0)
+        if n:
+            outcome = f"found <b>{n}</b> accessory(ies)"
+        elif entry.get("probe_error"):
+            outcome = f"probe error: {entry.get('probe_error')}"
+        else:
+            outcome = "no accessories"
+        parts.append(f"<li>{label}: {outcome}</li>")
+    parts.append("</ul>")
+    return "".join(parts)
+
+
+def _hap_discovery_row(discovery: Any) -> dict[str, Any] | None:
+    d = discovery.description
+    if not d or not getattr(d, "id", None):
+        return None
+    addrs = getattr(d, "addresses", None)
+    if isinstance(addrs, (list, tuple)) and addrs:
+        host = str(addrs[0])
+    else:
+        host = str(getattr(d, "address", "") or "")
+    try:
+        port = int(d.port)
+    except (TypeError, ValueError):
+        port = 0
+    return {
+        "id": d.id,
+        "name": d.name or "",
+        "paired": bool(discovery.paired),
+        "host": host,
+        "port": port,
+    }
+
+
+def _iter_hk_transport_discoveries(
+    hk: HKController,
+    log: logging.Logger,
+    *,
+    transport_discovery_warned: list[bool],
+):
+    try:
+        transports = getattr(hk, "transports", None)
+        if not transports:
+            return
+        for transport in transports.values():
+            discoveries = getattr(transport, "discoveries", None) or {}
+            yield from discoveries.values()
+    except (AttributeError, TypeError) as ex:
+        if not transport_discovery_warned[0]:
+            transport_discovery_warned[0] = True
+            log.warning(
+                "aiohomekit transport discovery iteration failed (%s); use aiohomekit "
+                "in the supported range (see requirements.txt / module docstring).",
+                ex,
+            )
+
+
+async def _poll_hap_discoveries_from_hk(
+    hk: HKController,
+    log: logging.Logger,
+    *,
+    timeout: float,
+) -> list[dict[str, Any]]:
+    """Poll aiohomekit transport discovery cache for ``timeout`` seconds."""
+    seen_ids: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    warned = [False]
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + float(timeout)
+    interval = 0.5
+    while loop.time() < deadline:
+        for discovery in _iter_hk_transport_discoveries(hk, log, transport_discovery_warned=warned):
+            row = _hap_discovery_row(discovery)
+            if not row:
+                continue
+            did = row["id"]
+            if did in seen_ids:
+                continue
+            seen_ids.add(did)
+            rows.append(row)
+            log.info(
+                "HAP accessory: name=%r id=%s paired=%s %s:%s",
+                row["name"],
+                did,
+                row["paired"],
+                row["host"],
+                row["port"],
+            )
+        await asyncio.sleep(interval)
+    return rows
+
+
+async def discover_probe_ephemeral(
+    log: logging.Logger,
+    base_params: dict[str, Any],
+    override: dict[str, str],
+    timeout: float = 6.0,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Run a short HAP discover scan with temporary zeroconf overrides (in-memory only)."""
+    merged = dict(base_params)
+    merged.update(override)
+    zcm = ZeroconfManager(log)
+    hk: HKController | None = None
+    probe_diag: dict[str, Any] = {
+        "probe_override": dict(override),
+        "probe_ephemeral": True,
+    }
+    try:
+        await zcm.start(merged)
+        hk = HKController(async_zeroconf_instance=zcm.async_zeroconf)
+        await hk.async_start()
+        iface_ips, bind_source = resolve_zeroconf_interface_bind(merged, log)
+        probe_diag.update(
+            {
+                "zeroconf_mode": zcm.mode_label,
+                "using_unicast": zcm.using_unicast,
+                "using_explicit_interface_ips": bool(iface_ips),
+                "zeroconf_interface_ips": iface_ips,
+                "zeroconf_interface_bind_source": bind_source,
+                "platform": sys.platform,
+                "mdns_5353_probe": probe_mdns_port_5353(),
+            }
+        )
+        log.info(
+            "Ephemeral discover probe (%s, %.1fs): %s",
+            format_discover_probe_override_label(override),
+            timeout,
+            format_zeroconf_diag_log_summary(probe_diag),
+        )
+        rows = await _poll_hap_discoveries_from_hk(hk, log, timeout=timeout)
+        probe_diag["accessories_found"] = len(rows)
+        return rows, probe_diag
+    except Exception as ex:
+        log.warning(
+            "Ephemeral discover probe failed override=%s: %s",
+            override,
+            ex,
+            exc_info=True,
+        )
+        probe_diag["probe_error"] = str(ex)
+        probe_diag["accessories_found"] = 0
+        return [], probe_diag
+    finally:
+        if hk is not None:
+            try:
+                await hk.async_stop()
+            except Exception:
+                log.exception("ephemeral probe HKController.async_stop")
+        await zcm.stop()
 
 
 def format_zeroconf_diag_log_summary(diag: dict[str, Any]) -> str:
@@ -2488,25 +2715,7 @@ class HomeKitHubBridge:
                 )
 
     def _row_from_discovery(self, discovery: Any) -> dict[str, Any] | None:
-        d = discovery.description
-        if not d or not getattr(d, "id", None):
-            return None
-        addrs = getattr(d, "addresses", None)
-        if isinstance(addrs, (list, tuple)) and addrs:
-            host = str(addrs[0])
-        else:
-            host = str(getattr(d, "address", "") or "")
-        try:
-            port = int(d.port)
-        except (TypeError, ValueError):
-            port = 0
-        return {
-            "id": d.id,
-            "name": d.name or "",
-            "paired": bool(discovery.paired),
-            "host": host,
-            "port": port,
-        }
+        return _hap_discovery_row(discovery)
 
     async def discover_collect(self, timeout: float = 12.0) -> list[dict[str, Any]]:
         """
@@ -2528,31 +2737,7 @@ class HomeKitHubBridge:
             timeout,
         )
         self.log.info("Discovery network context: %s", format_zeroconf_diag_log_summary(diag))
-        seen_ids: set[str] = set()
-        rows: list[dict[str, Any]] = []
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + float(timeout)
-        interval = 0.5
-
-        while loop.time() < deadline:
-            for discovery in self._iter_transport_discoveries():
-                row = self._row_from_discovery(discovery)
-                if not row:
-                    continue
-                did = row["id"]
-                if did in seen_ids:
-                    continue
-                seen_ids.add(did)
-                rows.append(row)
-                self.log.info(
-                    "HAP accessory: name=%r id=%s paired=%s %s:%s",
-                    row["name"],
-                    did,
-                    row["paired"],
-                    row["host"],
-                    row["port"],
-                )
-            await asyncio.sleep(interval)
+        rows = await _poll_hap_discoveries_from_hk(self._hk, self.log, timeout=timeout)
 
         self.log.info(
             "Discovery window ended: %d unique HAP accessory(ies) in this window",

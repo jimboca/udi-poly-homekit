@@ -51,9 +51,10 @@ Open the **HomeKit Hub** Node Server **Configuration** page and scroll to the **
 
 | Notice key | What it means |
 |------------|----------------|
-| **HomeKit DISCOVER running** (`discover_progress`) | Scan in progress (~12 seconds); removed when the scan finishes |
-| **HomeKit discover** (`hap_discover`) | Scan results — unpaired vs already paired, whether rows were added, plus **Zeroconf / hub diagnostic** summary (and **Suggestions** when the scan found zero accessories) |
-| **Zeroconf diagnostic** (`zeroconf_diag`) | Output of **ZEROCONF_DIAG** command — full JSON snapshot plus compact summary |
+| **HomeKit DISCOVER running** (`discover_progress`) | Scan in progress — shows the current phase (primary scan, alternate-bind probe, or saving settings) and a countdown when applicable |
+| **HomeKit bridge restarting** (`discover_bridge_restart`) | After a successful alternate-bind probe, zeroconf Custom Params were saved and the bridge is restarting (~1–2 minutes) |
+| **HomeKit discover** (`hap_discover`) | Scan results — unpaired vs already paired, whether rows were added, attempt history and suggestions when probes ran |
+| **Zeroconf diagnostic** (`zeroconf_diag`) | Output of manual **ZEROCONF_DIAG** command only — full JSON snapshot (not shown during **DISCOVER**) |
 | **HomeKit Hub failed to start** | Bridge did not start — check log and zeroconf/port 5353 |
 | **HomeKit discover scan failed** | Network/mDNS scan error |
 | **HomeKit pairing failed** / **pairing code rejected** | Wrong or expired code, or device not in pairing mode |
@@ -149,7 +150,9 @@ Check:
 - If the device still does not appear, **remove power** (unplug or breaker off), wait **10–30 seconds**, restore power, re-enter pairing mode, wait **30–60 seconds**, then **Discover** again.
 - Run **Zeroconf diagnostic** on the controller and read the Notice. When extra networks are configured, confirm **`zeroconf_interface_ips`** lists the expected local addresses (primary Polisy interface plus each IoT VLAN).
 
-If the **HomeKit discover** Notice says **no accessories found**, this is usually a network/mDNS issue, not a UI bug. The Notice also includes a **Zeroconf / hub diagnostic** line and **Suggestions** (when the scan found zero devices). Run **ZEROCONF_DIAG** for the full JSON snapshot.
+If the **HomeKit discover** Notice says **no accessories found**, this is usually a network/mDNS issue, not a UI bug. The Notice includes **Discover attempt history** and **Suggestions** when alternate-bind probes ran. Zeroconf technical details are written to **`debug.log`** only (search `DISCOVER zeroconf diag`); run **ZEROCONF_DIAG** manually if you need the JSON snapshot in a Notice.
+
+When an alternate-bind probe succeeds, the hub **saves the winning `zeroconf_*` Custom Param(s)** and shows **HomeKit bridge restarting** while the bridge recycles (~1–2 minutes). Discover results and pairing rows are saved immediately — you can enter pairing codes while waiting for **Bridge Status** to return to **Running**.
 
 ##### Reading the diagnostic summary
 
@@ -347,6 +350,7 @@ All values shown on the controller as **Hub error code**:
 
 ## Related documentation
 
+- [SUPPORT_CASES.md](SUPPORT_CASES.md) — internal analyzed support cases (log triage notes)
 - [CONFIG.md](CONFIG.md) — setup, pairing flow, UI-seeded custom params
 - [CONFIG_EXTRA.md](CONFIG_EXTRA.md) — advanced MQTT, WebSocket, and zeroconf parameters
 - [PROTOCOL.md](PROTOCOL.md) — WebSocket/MQTT API for integrators

@@ -35,6 +35,10 @@ from homekit_hub.bridge import (
     resolve_zeroconf_interface_bind,
     default_outbound_ip,
     discover_network_hints,
+    discover_probe_hints,
+    ephemeral_discover_probe_overrides,
+    format_discover_attempt_history_html,
+    format_discover_probe_override_label,
     format_zeroconf_diag_log_summary,
 )
 
@@ -850,4 +854,55 @@ def test_discover_network_hints_mismatch_poly_and_outbound():
     }
     hints = discover_network_hints(diag, accessories_found=0)
     assert any("differs from default outbound IP" in h for h in hints)
+
+
+def test_ephemeral_discover_probe_overrides_bsd_auto_primary():
+    params = {"zeroconf_unicast": "on", "zeroconf_interfaces": ""}
+    diag = {
+        "platform": "freebsd14",
+        "zeroconf_interface_bind_source": "auto_primary",
+    }
+    overrides = ephemeral_discover_probe_overrides(params, diag)
+    assert overrides == [{"zeroconf_interfaces": "all"}]
+
+
+def test_ephemeral_discover_probe_overrides_skips_when_already_all():
+    params = {"zeroconf_unicast": "auto", "zeroconf_interfaces": "all"}
+    diag = {"platform": "freebsd14", "zeroconf_interface_bind_source": "none"}
+    assert ephemeral_discover_probe_overrides(params, diag) == []
+
+
+def test_ephemeral_discover_probe_overrides_unicast_off():
+    params = {"zeroconf_unicast": "off", "zeroconf_interfaces": ""}
+    diag = {
+        "platform": "linux",
+        "zeroconf_interface_bind_source": "none",
+    }
+    overrides = ephemeral_discover_probe_overrides(params, diag)
+    assert {"zeroconf_unicast": "auto"} in overrides
+
+
+def test_discover_probe_hints_auto_applied():
+    hints = discover_probe_hints(
+        [],
+        auto_applied_override={"zeroconf_interfaces": "all"},
+    )
+    assert any("zeroconf_interfaces=all" in h for h in hints)
+
+
+def test_discover_probe_hints_all_failed():
+    history = [
+        {"label": "Primary", "accessories_found": 0},
+        {"label": "Probe 1", "accessories_found": 0},
+    ]
+    hints = discover_probe_hints(history)
+    assert any("All discover attempts" in h for h in hints)
+
+
+def test_format_discover_attempt_history_html():
+    html_out = format_discover_attempt_history_html(
+        [{"label": "Primary scan", "accessories_found": 0}]
+    )
+    assert "Discover attempt history" in html_out
+    assert "Primary scan" in html_out
 
