@@ -38,7 +38,6 @@ from homekit_hub.bridge import (
     discover_probe_hints,
     ephemeral_discover_probe_overrides,
     format_discover_attempt_history_html,
-    format_discover_probe_override_label,
     format_zeroconf_diag_log_summary,
 )
 
