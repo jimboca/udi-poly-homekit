@@ -25,7 +25,12 @@ from homekit_hub import (
     mqtt_transport_enabled,
     normalize_hap_pin,
 )
-from homekit_hub.bridge import TYPED_DISCOVER_NETWORKS_KEY, _parse_slot_value
+from homekit_hub.bridge import (
+    TYPED_DISCOVER_NETWORKS_KEY,
+    _parse_slot_value,
+    discover_network_hints,
+    format_zeroconf_diag_log_summary,
+)
 
 from nodes import VERSION
 from .PairedDeviceNode import PairedDeviceNode
@@ -296,15 +301,24 @@ class Controller(Node):
                     "name": TYPED_DISCOVER_NETWORKS_KEY,
                     "title": "Extra Discovery Networks",
                     "desc": (
-                        "Optional extra LAN/VLAN subnets for HomeKit mDNS (DISCOVER). "
-                        "Same idea as udi-poly-kasa: add a row per IoT network when accessories "
-                        "are not on the Polisy primary interface."
+                        "Optional — leave empty on typical single-LAN installs. Add one row per "
+                        "IoT/VLAN subnet when HomeKit accessories are not on the Polisy primary "
+                        "interface (same pattern as udi-poly-kasa). Use the subnet broadcast "
+                        "(e.g. 192.168.222.255), gateway (e.g. 192.168.222.1), or this host's IP "
+                        "on that VLAN. Save typed configuration, then run ZEROCONF_DIAG and confirm "
+                        "zeroconf_interface_ips in the Notice before DISCOVER. On FreeBSD/Polisy the "
+                        "hub also auto-binds the primary interface when this list is empty."
                     ),
                     "isList": True,
                     "params": [
                         {
                             "name": "address",
-                            "title": "Broadcast address (e.g. 192.168.222.255) or this host's IP on that VLAN",
+                            "title": "Broadcast, gateway, or local IP on the IoT/VLAN",
+                            "desc": (
+                                "Examples: 192.168.222.255 (broadcast), 192.168.222.1 (gateway), "
+                                "192.168.222.10 (Polisy IP on that VLAN). The hub resolves this to "
+                                "a local interface IP for mDNS during DISCOVER."
+                            ),
                             "isRequired": True,
                         },
                     ],
@@ -328,7 +342,93 @@ class Controller(Node):
                 out[k] = v
         out["_discover_networks"] = self._bridge_get_discover_network_rows()
         out["_primary_network_broadcast"] = self._primary_network_broadcast()
+        out["_poly_network_interface"] = self._poly_network_interface_snapshot()
         return out
+
+    def _poly_network_interface_snapshot(self) -> dict[str, str]:
+        try:
+            ni = self.poly.network_interface
+            if isinstance(ni, dict):
+                out: dict[str, str] = {}
+                for key in ("addr", "broadcast", "netmask", "gateway"):
+                    val = ni.get(key)
+                    if val is not None and str(val).strip():
+                        out[key] = str(val).strip()
+                return out
+        except Exception:
+            LOGGER.debug("network_interface snapshot unavailable", exc_info=True)
+        return {}
+
+    def _collect_zeroconf_diag(self) -> dict[str, Any]:
+        if not self.bridge:
+            return {}
+        try:
+            return self.bridge.zeroconf_diag()
+        except Exception:
+            LOGGER.exception("zeroconf_diag failed")
+            return {}
+
+    def _log_zeroconf_diag(
+        self,
+        *,
+        context: str,
+        accessories_found: int | None = None,
+    ) -> dict[str, Any]:
+        diag = self._collect_zeroconf_diag()
+        if not diag:
+            return {}
+        LOGGER.info(
+            "HomeKit %s zeroconf diag: %s",
+            context,
+            format_zeroconf_diag_log_summary(diag),
+        )
+        hints = discover_network_hints(diag, accessories_found=accessories_found)
+        for hint in hints:
+            LOGGER.info("HomeKit %s network hint: %s", context, hint)
+        LOGGER.debug(
+            "HomeKit %s zeroconf diag full:\n%s",
+            context,
+            json.dumps(diag, indent=2, sort_keys=True, default=str),
+        )
+        return diag
+
+    def _zeroconf_diag_notice_html(
+        self,
+        diag: dict[str, Any],
+        *,
+        accessories_found: int | None = None,
+        compact: bool = False,
+        include_json: bool = False,
+    ) -> str:
+        if not diag:
+            return ""
+        hints = discover_network_hints(diag, accessories_found=accessories_found)
+        line = json.dumps(diag, indent=2, sort_keys=True, default=str)
+        if compact:
+            summary = html.escape(format_zeroconf_diag_log_summary(diag), quote=True)
+            parts = [
+                "<b>Zeroconf / hub diagnostic</b><br/>",
+                f"<code>{summary}</code><br/>",
+            ]
+            if hints:
+                parts.append("<b>Suggestions:</b><ul>")
+                for hint in hints:
+                    parts.append(f"<li>{html.escape(hint, quote=True)}</li>")
+                parts.append("</ul>")
+            if include_json:
+                parts.append("<b>Full snapshot:</b><br/><pre>")
+                parts.append(html.escape(line))
+                parts.append("</pre>")
+            else:
+                parts.append(
+                    "Full JSON is in <code>debug.log</code> (search DISCOVER zeroconf diag). "
+                    "Run <b>ZEROCONF_DIAG</b> for the complete snapshot.<br/>"
+                )
+            return "".join(parts)
+        return (
+            "<b>Zeroconf / hub diagnostic</b><br/><pre>"
+            f"{html.escape(line)}</pre>"
+        )
 
     def _primary_network_broadcast(self) -> Optional[str]:
         try:
@@ -1610,6 +1710,7 @@ class Controller(Node):
                     "'HomeKit Hub ready' after the Node Server starts, then try again."
                 )
                 return
+            discover_diag = self._log_zeroconf_diag(context="DISCOVER")
             discover_notice_token = self._start_discover_progress_notice(12)
             fut = asyncio.run_coroutine_threadsafe(
                 self.bridge.discover_collect(12.0), self.mainloop
@@ -1627,7 +1728,11 @@ class Controller(Node):
                 return
             n = len(rows) if rows else 0
             LOGGER.info("HomeKit DISCOVER: scan finished, %d accessory(ies) in result", n)
-            self._present_hap_discover_results(rows or [], source="manual")
+            if n == 0:
+                self._log_zeroconf_diag(context="DISCOVER", accessories_found=0)
+            self._present_hap_discover_results(
+                rows or [], source="manual", zeroconf_diag=discover_diag
+            )
         except Exception as e:
             self.report_error(
                 ERR_DISCOVER_UNEXPECTED,
@@ -1939,7 +2044,13 @@ class Controller(Node):
             self._maybe_restart_on_config_change()
         return (n_appended, n_filled, n_merged)
 
-    def _present_hap_discover_results(self, rows: list, *, source: str = "manual") -> None:
+    def _present_hap_discover_results(
+        self,
+        rows: list,
+        *,
+        source: str = "manual",
+        zeroconf_diag: Optional[dict[str, Any]] = None,
+    ) -> None:
         """Persist discover snapshot and UI notice.
 
         ``source="auto"`` + empty ``rows``: do not clear ``last_hap_discover`` or replace the
@@ -1982,9 +2093,18 @@ class Controller(Node):
             )
 
         if not rows:
-            self.Notices["hap_discover"] = (
+            notice = (
                 "HomeKit discover: no accessories found. Check LAN, firewall, and that the device is in pairing mode."
             )
+            diag = zeroconf_diag if zeroconf_diag is not None else self._collect_zeroconf_diag()
+            diag_html = self._zeroconf_diag_notice_html(
+                diag,
+                accessories_found=0,
+                compact=True,
+            )
+            if diag_html:
+                notice += "<br/>" + diag_html
+            self.Notices["hap_discover"] = notice
             return
 
         unpaired = [r for r in rows if not r.get("paired")]
@@ -2052,6 +2172,12 @@ class Controller(Node):
                     f"<li><b>id</b> <code>{rid}</code> &nbsp; <b>name</b> {nm}</li>"
                 )
             parts.append("</ul>")
+        diag = zeroconf_diag if zeroconf_diag is not None else self._collect_zeroconf_diag()
+        diag_html = self._zeroconf_diag_notice_html(
+            diag, accessories_found=len(rows), compact=True
+        )
+        if diag_html:
+            parts.append("<br/>" + diag_html)
         self.Notices["hap_discover"] = "".join(parts)
 
     def heartbeat(self):
@@ -2081,12 +2207,21 @@ class Controller(Node):
                 "ZEROCONF_DIAG skipped: hub not ready (wait for log line 'HomeKit Hub ready')."
             )
             return
-        diag = self.bridge.zeroconf_diag()
-        line = json.dumps(diag, indent=2, sort_keys=True, default=str)
-        LOGGER.info("ZEROCONF_DIAG:\n%s", line)
-        self.Notices["zeroconf_diag"] = (
-            "<b>Zeroconf / hub diagnostic</b><br/><pre>"
-            f"{html.escape(line)}</pre>"
+        diag = self._collect_zeroconf_diag()
+        if not diag:
+            LOGGER.warning(
+                "ZEROCONF_DIAG skipped: hub not ready (wait for log line 'HomeKit Hub ready')."
+            )
+            return
+        LOGGER.info(
+            "ZEROCONF_DIAG: %s",
+            format_zeroconf_diag_log_summary(diag),
+        )
+        for hint in discover_network_hints(diag):
+            LOGGER.info("ZEROCONF_DIAG network hint: %s", hint)
+        LOGGER.debug("ZEROCONF_DIAG full:\n%s", json.dumps(diag, indent=2, sort_keys=True, default=str))
+        self.Notices["zeroconf_diag"] = self._zeroconf_diag_notice_html(
+            diag, compact=True, include_json=True
         )
 
     def _clear_slot_pin_and_reload(self, slot: int, *, source: str) -> bool:

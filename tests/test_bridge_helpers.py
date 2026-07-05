@@ -32,6 +32,10 @@ from homekit_hub.bridge import (
     _zeroconf_ctor_kwargs,
     normalize_discover_network_address,
     resolve_zeroconf_interface_ips,
+    resolve_zeroconf_interface_bind,
+    default_outbound_ip,
+    discover_network_hints,
+    format_zeroconf_diag_log_summary,
 )
 
 
@@ -262,11 +266,78 @@ def test_resolve_zeroconf_interface_ips_from_rows(monkeypatch):
             "192.168.50.255": "192.168.50.2",
         }.get(hint),
     )
-    assert resolve_zeroconf_interface_ips(params, log) == [
+    ips, source = resolve_zeroconf_interface_bind(params, log)
+    assert source == "discover_network_rows"
+    assert ips == [
         "192.168.1.5",
         "192.168.222.10",
         "192.168.50.2",
     ]
+    assert resolve_zeroconf_interface_ips(params, log) == ips
+
+
+def test_resolve_zeroconf_auto_primary_on_bsd(monkeypatch):
+    log = logging.getLogger("discover-net")
+    monkeypatch.setattr("homekit_hub.bridge.sys.platform", "freebsd14")
+    monkeypatch.delenv("HOMEKIT_HUB_ZEROCONF_INTERFACES", raising=False)
+    monkeypatch.setattr(
+        "homekit_hub.bridge.local_ip_for_discover_network",
+        lambda hint, _log=None: "192.168.1.5" if hint == "192.168.1.255" else None,
+    )
+    params = {
+        "_primary_network_broadcast": "192.168.1.255",
+        "_discover_networks": [],
+        "_poly_network_interface": {"addr": "192.168.55.22", "broadcast": "192.168.1.255"},
+    }
+    ips, source = resolve_zeroconf_interface_bind(params, log)
+    assert source == "auto_primary"
+    assert ips == ["192.168.1.5"]
+
+
+def test_resolve_zeroconf_auto_primary_outbound_fallback(monkeypatch):
+    log = logging.getLogger("discover-net")
+    monkeypatch.setattr("homekit_hub.bridge.sys.platform", "darwin")
+    monkeypatch.delenv("HOMEKIT_HUB_ZEROCONF_INTERFACES", raising=False)
+    monkeypatch.setattr(
+        "homekit_hub.bridge.local_ip_for_discover_network",
+        lambda _hint, _log=None: None,
+    )
+    monkeypatch.setattr(
+        "homekit_hub.bridge.default_outbound_ip",
+        lambda _rhost="8.8.8.8": "192.168.55.22",
+    )
+    params = {
+        "_primary_network_broadcast": "192.168.1.255",
+        "_discover_networks": [],
+    }
+    ips, source = resolve_zeroconf_interface_bind(params, log)
+    assert source == "auto_primary_outbound"
+    assert ips == ["192.168.55.22"]
+
+
+def test_resolve_zeroconf_auto_primary_skipped_on_linux(monkeypatch):
+    log = logging.getLogger("discover-net")
+    monkeypatch.setattr("homekit_hub.bridge.sys.platform", "linux")
+    params = {
+        "_primary_network_broadcast": "192.168.1.255",
+        "_discover_networks": [],
+    }
+    ips, source = resolve_zeroconf_interface_bind(params, log)
+    assert source == "none"
+    assert ips == []
+
+
+def test_resolve_zeroconf_auto_primary_skipped_when_interfaces_all(monkeypatch):
+    log = logging.getLogger("discover-net")
+    monkeypatch.setattr("homekit_hub.bridge.sys.platform", "freebsd14")
+    monkeypatch.setenv("HOMEKIT_HUB_ZEROCONF_INTERFACES", "all")
+    params = {
+        "_primary_network_broadcast": "192.168.1.255",
+        "_discover_networks": [],
+    }
+    ips, source = resolve_zeroconf_interface_bind(params, log)
+    assert source == "none"
+    assert ips == []
 
 
 def test_zeroconf_ctor_kwargs_uses_explicit_interface_ips(monkeypatch):
@@ -275,8 +346,8 @@ def test_zeroconf_ctor_kwargs_uses_explicit_interface_ips(monkeypatch):
     monkeypatch.delenv("HOMEKIT_HUB_ZEROCONF_IP_VERSION", raising=False)
     monkeypatch.setattr("homekit_hub.bridge.sys.platform", "freebsd14")
     monkeypatch.setattr(
-        "homekit_hub.bridge.resolve_zeroconf_interface_ips",
-        lambda _params, _log=None: ["192.168.222.10"],
+        "homekit_hub.bridge.resolve_zeroconf_interface_bind",
+        lambda _params, _log=None: (["192.168.222.10"], "discover_network_rows"),
     )
     kw = _zeroconf_ctor_kwargs(log, unicast=True, params={"_discover_networks": []})
     assert kw["interfaces"] == ["192.168.222.10"]
@@ -691,3 +762,92 @@ def test_ensure_top_level_pairing_registered_noops_without_hub_or_ids():
     bridge._ensure_top_level_pairing_registered("slot_1", pairing)
     assert bridge._hk.pairings == {}
     assert bridge._hk.aliases == {}
+
+
+def test_default_outbound_ip_returns_string_or_none(monkeypatch):
+    sock = MagicMock()
+    sock.getsockname.return_value = ("192.168.1.5", 0)
+    monkeypatch.setattr("homekit_hub.bridge.socket.socket", lambda *a, **k: sock)
+    assert default_outbound_ip() == "192.168.1.5"
+
+
+def test_format_zeroconf_diag_log_summary_includes_key_fields():
+    diag = {
+        "zeroconf_mode": "auto",
+        "using_unicast": False,
+        "using_explicit_interface_ips": True,
+        "zeroconf_interface_ips": ["192.168.222.10"],
+        "discover_network_rows": 1,
+        "primary_network_broadcast": "192.168.1.255",
+        "primary_network_local_ip": "192.168.1.5",
+        "poly_network_interface": {"addr": "192.168.55.22"},
+        "default_outbound_ip": "192.168.55.22",
+        "mdns_5353_probe": "udp_5353_bind_ok",
+        "platform": "freebsd14",
+    }
+    summary = format_zeroconf_diag_log_summary(diag)
+    assert "mode=auto" in summary
+    assert "iface_ips=['192.168.222.10']" in summary
+    assert "poly_addr=192.168.55.22" in summary
+
+
+def test_discover_network_hints_bsd_auto_bind_failed():
+    diag = {
+        "platform": "freebsd14",
+        "discover_network_rows": 0,
+        "using_explicit_interface_ips": False,
+        "zeroconf_interface_bind_source": "none",
+        "zeroconf_interface_ips": [],
+        "hub_running": True,
+        "using_unicast": False,
+        "mdns_5353_probe": "udp_5353_bind_ok",
+    }
+    hints = discover_network_hints(diag, accessories_found=0)
+    assert any("Automatic primary interface bind failed" in h for h in hints)
+
+
+def test_discover_network_hints_bsd_auto_bind_active_other_vlan():
+    diag = {
+        "platform": "freebsd14",
+        "discover_network_rows": 0,
+        "using_explicit_interface_ips": True,
+        "zeroconf_interface_bind_source": "auto_primary",
+        "zeroconf_interface_ips": ["192.168.1.5"],
+        "hub_running": True,
+        "using_unicast": False,
+        "mdns_5353_probe": "udp_5353_bind_ok",
+    }
+    hints = discover_network_hints(diag, accessories_found=0)
+    assert any("Automatic primary interface bind is active" in h for h in hints)
+
+
+def test_discover_network_hints_rows_but_no_iface_ips():
+    diag = {
+        "platform": "linux",
+        "discover_network_rows": 2,
+        "using_explicit_interface_ips": False,
+        "zeroconf_interface_ips": [],
+        "hub_running": True,
+        "using_unicast": False,
+        "mdns_5353_probe": "udp_5353_bind_ok",
+    }
+    hints = discover_network_hints(diag, accessories_found=0)
+    assert any("zeroconf_interface_ips is empty" in h for h in hints)
+
+
+def test_discover_network_hints_mismatch_poly_and_outbound():
+    diag = {
+        "platform": "freebsd14",
+        "discover_network_rows": 0,
+        "using_explicit_interface_ips": False,
+        "zeroconf_interface_ips": [],
+        "hub_running": True,
+        "using_unicast": False,
+        "mdns_5353_probe": "udp_5353_bind_ok",
+        "primary_network_broadcast": "192.168.1.255",
+        "poly_network_interface": {"addr": "192.168.1.5"},
+        "default_outbound_ip": "192.168.55.22",
+    }
+    hints = discover_network_hints(diag, accessories_found=0)
+    assert any("differs from default outbound IP" in h for h in hints)
+

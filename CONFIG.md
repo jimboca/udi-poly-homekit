@@ -24,13 +24,42 @@ Applies to **Standard** and **Professional**. **No iPhone, iPad, Mac, or Apple H
 
 1. Add **HomeKit Hub** from the PG3 store and start the Node Server.
 2. Put the accessory in **HomeKit pairing mode** (see vendor docs). Confirm it is **unpaired** from Apple Home and other controllers.
-3. **IoT / separate VLAN (optional):** if accessories are **not** on the Polisy primary LAN (common for Ecobee on a dedicated IoT Wi‑Fi), open **Configuration** → **Custom Typed Configuration Parameters** → **Extra Discovery Networks** and **add row** with that subnet’s **broadcast address** (e.g. `192.168.222.255`), gateway (e.g. `192.168.222.1`), or this host’s IP on that VLAN (e.g. `192.168.222.10`). Same pattern as **udi-poly-kasa**. **Save** — the hub restarts mDNS. Run **ZEROCONF_DIAG** and confirm the notice lists expected `zeroconf_interface_ips` before **DISCOVER**. Skip this on typical single-LAN installs.
-4. On the **HomeKit Hub** controller node, run **DISCOVER**. PG3 will show Notices about what is happening and what it found.
+3. **IoT / separate VLAN (optional):** only when accessories are **not** on the Polisy primary LAN — see [Discovery networks (setup)](#discovery-networks-setup) below. Skip on typical single-LAN installs.
+4. On the **HomeKit Hub** controller node, run **DISCOVER**. Read **Notices** on the Node Server **Configuration** page (Custom section): **HomeKit discover** includes scan results and a **Zeroconf / hub diagnostic** summary when the new build is installed.
 5. Open **Configuration** → **Custom Typed Configuration Parameters** → **HomeKit pairing slots**. **Reload the Configuration page in your browser** if the new row does not appear yet (the table refresh button alone may not be enough).
 6. Find the row for your device (id and name are filled in by **DISCOVER**). In **HomeKit pairing code** (`hap_pin`), enter the **8-digit code currently shown on the accessory** while it is in pairing mode (`12345678` or `123-45-678` — either format works). **Save**.
 7. Wait for pairing to finish. A **Paired HomeKit device** child node should appear; **ST** should show paired/connected. Check PG3 **Notices** or `logs/debug.log` if pairing fails.
 
 **Order matters:** run **DISCOVER** before entering **hap_pin** so id/name are prefilled. If you already typed a PIN, clear it, run **DISCOVER** with the device in pairing mode, then re-enter the current code.
+
+### Discovery networks (setup)
+
+Use this when HomeKit accessories live on a **different subnet/VLAN** than the Polisy primary interface (common for Ecobee on dedicated IoT Wi‑Fi). Same idea as **udi-poly-kasa** **Extra Discovery Networks**.
+
+| When | Action |
+|------|--------|
+| Accessories on the **same LAN** as Polisy | Leave **Extra Discovery Networks** **empty** — the hub uses the primary interface automatically (on FreeBSD/Polisy it auto-binds from `poly.network_interface` when no extra rows are configured). |
+| Accessories on **IoT / guest / VLAN** | Add one row per subnet under **Configuration → Custom Typed Configuration Parameters → Extra Discovery Networks**. |
+
+**What to enter in each row** (`address` field):
+
+| Value type | Example | When to use |
+|------------|---------|-------------|
+| Subnet **broadcast** | `192.168.222.255` | Preferred when you know the IoT subnet mask |
+| **Gateway** on that VLAN | `192.168.222.1` | Works when broadcast is unknown |
+| **This host's IP** on that VLAN | `192.168.222.10` | When Polisy has a routed address on the IoT network |
+
+**After adding or changing rows:**
+
+1. **Save** typed configuration (hub restarts mDNS).
+2. Run **ZEROCONF_DIAG** on the controller — the Notice should list your IoT address in **`zeroconf_interface_ips`**.
+3. Run **DISCOVER** while the accessory is in HomeKit pairing mode.
+
+**Verify without extra rows (single LAN):** run **DISCOVER** or **ZEROCONF_DIAG** and check the Notice or `logs/debug.log` for `bind_source=auto_primary` and `iface_ips=[…]` matching the Polisy primary IP.
+
+**Still no devices?** Confirm routing and firewall rules allow mDNS (UDP 5353) between VLANs, disable AP client isolation on Wi‑Fi, and see [DEBUGGING.md — IoT / separate VLAN](DEBUGGING.md#iot--separate-vlan--extra-discovery-networks).
+
+Full field reference: [Extra Discovery Networks](#extra-discovery-networks-networks).
 
 ### Pairing code can change
 
@@ -279,9 +308,10 @@ Same pattern as **udi-poly-kasa**. Use when HomeKit accessories live on a **diff
 |-------|-------------|
 | **Broadcast address** (`address`) | Subnet broadcast (e.g. `192.168.222.255`), gateway (e.g. `192.168.222.1`), or this host's IP on that VLAN (e.g. `192.168.222.10`). |
 
-- Leave empty on typical single-LAN installs.
+- Leave empty on typical single-LAN installs. On **FreeBSD/Polisy**, when this list is empty the hub **auto-binds** the Polisy primary interface for mDNS (`bind_source=auto_primary` in **DISCOVER** / **ZEROCONF_DIAG** output).
 - After adding or changing rows, **Save** typed configuration; the hub restarts mDNS automatically.
 - Run **ZEROCONF_DIAG** to confirm `zeroconf_interface_ips` lists the expected addresses.
+- Setup walkthrough: [Discovery networks (setup)](#discovery-networks-setup).
 
 ### Persisted custom data
 

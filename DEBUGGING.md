@@ -47,23 +47,23 @@ Startup can take up to **1–2 minutes** after a restart (configuration must loa
 
 ### 1. PG3 Notices
 
-Open the **HomeKit Hub** Node Server in Polyglot and read **Notices**. Important ones:
+Open the **HomeKit Hub** Node Server **Configuration** page and scroll to the **Custom** section (not a popup on the IoX tree). Important keys:
 
-| Notice topic | What it means |
-|--------------|----------------|
-| **HomeKit DISCOVER running** | Scan in progress (~12 seconds) |
-| **HomeKit discover** (`hap_discover`) | Scan results — unpaired vs already paired, whether rows were added |
+| Notice key | What it means |
+|------------|----------------|
+| **HomeKit DISCOVER running** (`discover_progress`) | Scan in progress (~12 seconds); removed when the scan finishes |
+| **HomeKit discover** (`hap_discover`) | Scan results — unpaired vs already paired, whether rows were added, plus **Zeroconf / hub diagnostic** summary (and **Suggestions** when the scan found zero accessories) |
+| **Zeroconf diagnostic** (`zeroconf_diag`) | Output of **ZEROCONF_DIAG** command — full JSON snapshot plus compact summary |
 | **HomeKit Hub failed to start** | Bridge did not start — check log and zeroconf/port 5353 |
 | **HomeKit discover scan failed** | Network/mDNS scan error |
 | **HomeKit pairing failed** / **pairing code rejected** | Wrong or expired code, or device not in pairing mode |
 | **HomeKit pairing success** | Pairing completed (transient notice) |
-| **Zeroconf diagnostic** | Output of **Zeroconf diagnostic** command — includes `zeroconf_interface_ips` and `discover_network_rows` when **Extra Discovery Networks** are configured |
 
-Notices are cleared when the Node Server restarts.
+Notices are **cleared when the Node Server restarts** — run **DISCOVER** again after each restart to refresh **`hap_discover`**.
 
 ### 2. Log file
 
-Path: **`logs/debug.log`** in the Node Server folder.
+Path: **`logs/debug.log`** in the Node Server folder (the live process writes here). Do **not** rely on a `debug.log` at the plugin root unless you are running a dev copy that logs there — on Polisy the canonical path is **`logs/debug.log`** (also mirrored to `/var/udx/logs/debug.log` on some installs).
 
 Useful log phrases:
 
@@ -73,6 +73,9 @@ Useful log phrases:
 | `HomeKit DISCOVER skipped: bridge not ready` | Hub not started yet — wait and retry |
 | `HomeKit DISCOVER: scan finished, N accessory(ies)` | Scan completed; `N=0` means nothing seen on LAN |
 | `HomeKit DISCOVER: starting` | Scan began |
+| `HomeKit DISCOVER zeroconf diag:` | Compact network/mDNS snapshot at scan start (bind source, interface IPs, 5353 probe) |
+| `HomeKit DISCOVER network hint:` | Actionable suggestion logged when the scan context warrants it (especially zero results) |
+| `Discovery network context:` | Per-scan bind summary inside `discover_collect` |
 | `Bridge start failed` / `zeroconf` / `5353` | mDNS / bridge startup problem |
 
 Increase log detail in Polyglot if needed (Node Server log level).
@@ -146,7 +149,21 @@ Check:
 - If the device still does not appear, **remove power** (unplug or breaker off), wait **10–30 seconds**, restore power, re-enter pairing mode, wait **30–60 seconds**, then **Discover** again.
 - Run **Zeroconf diagnostic** on the controller and read the Notice. When extra networks are configured, confirm **`zeroconf_interface_ips`** lists the expected local addresses (primary Polisy interface plus each IoT VLAN).
 
-If the **HomeKit discover** Notice says **no accessories found**, this is a network/mDNS issue, not a UI bug.
+If the **HomeKit discover** Notice says **no accessories found**, this is usually a network/mDNS issue, not a UI bug. The Notice also includes a **Zeroconf / hub diagnostic** line and **Suggestions** (when the scan found zero devices). Run **ZEROCONF_DIAG** for the full JSON snapshot.
+
+##### Reading the diagnostic summary
+
+Compact output (in Notices and log) includes fields such as:
+
+| Field | Good / expected | Problem indicator |
+|-------|-----------------|-------------------|
+| `bind_source=auto_primary` | Single LAN; hub auto-bound Polisy primary interface | `bind_source=none` on FreeBSD — add **Extra Discovery Networks** or check routing |
+| `iface_ips=[…]` | Lists local IP(s) used for mDNS | Empty when extra networks are configured — address did not resolve |
+| `discover_rows=N` | `0` = no extra networks; `>0` = IoT rows configured | Rows set but `iface_ips` empty — fix address format or routing |
+| `5353=bind_udp_5353_failed` | Common on Polisy when unicast mode is on — OK if `unicast=True` | Fails pairing only when `unicast=False` and 5353 is taken |
+| `primary_local` / `poly_addr` | Should match your Polisy LAN IP on single-LAN installs | Mismatch with accessory subnet — add **Extra Discovery Networks** |
+
+**Suggestions** in the Notice appear mainly when **zero accessories** were found. If devices are found but all show **Already paired elsewhere**, read that section of the Notice instead — network bind is working.
 
 ##### IoT / separate VLAN — Extra Discovery Networks
 
@@ -155,10 +172,10 @@ Use this when accessories live on a **different subnet** than the Polisy primary
 1. Open **Configuration → Custom Typed Configuration Parameters → Extra Discovery Networks**.
 2. **Add row** with that subnet's **broadcast address** (e.g. `192.168.222.255`), **gateway** (e.g. `192.168.222.1`), or **this host's IP** on that VLAN (e.g. `192.168.222.10`).
 3. **Save** — the hub restarts mDNS on the primary interface **plus** each configured subnet.
-4. Run **Zeroconf diagnostic**. The Notice should list your IoT address in **`zeroconf_interface_ips`**. If it is missing, the subnet hint did not resolve to a local interface — check routing, firewall/mDNS rules between VLANs, and the address format.
+4. Run **ZEROCONF_DIAG**. The Notice should list your IoT address in **`zeroconf_interface_ips`**. Log line **`HomeKit ZEROCONF_DIAG zeroconf diag:`** should show the same. If it is missing, the subnet hint did not resolve to a local interface — check routing, firewall/mDNS rules between VLANs, and the address format.
 5. Run **Discover** again while the accessory is in pairing mode.
 
-Leave **Extra Discovery Networks** empty on typical single-LAN installs (default zeroconf behavior is unchanged). Full parameter reference: [CONFIG.md — Extra Discovery Networks](CONFIG.md#extra-discovery-networks-networks).
+Leave **Extra Discovery Networks** empty on typical single-LAN installs — on FreeBSD/Polisy the hub **auto-binds the primary interface** when this list is empty (`bind_source=auto_primary`). Full setup guide: [CONFIG.md — Discovery networks (setup)](CONFIG.md#discovery-networks-setup).
 
 **Power-cycle the accessory:** if **Discover** still finds nothing after checking the list above, remove power from the device (unplug or switch off the circuit), wait **10–30 seconds**, power it back on, put it in **HomeKit pairing mode** again, wait **30–60 seconds** for it to advertise on the LAN, then run **Discover** once more. A cold reboot often clears a stuck mDNS advertisement or pairing-mode state that a soft reset does not fix.
 
@@ -233,7 +250,7 @@ Symptoms: **Discover** Notice lists the device under **Already paired elsewhere*
 
 On Polisy/eISY, leave **`zeroconf_unicast`** at default **`on`** unless support directs otherwise. See [CONFIG.md — zeroconf parameters](CONFIG.md#reference-custom-configuration-parameters).
 
-Run **Zeroconf diagnostic** and include the Notice when asking for help. When **Extra Discovery Networks** are configured, the Notice includes **`discover_network_rows`** (what you saved) and **`zeroconf_interface_ips`** (what the hub actually bound for mDNS).
+Run **ZEROCONF_DIAG** and include the **`zeroconf_diag`** or **`hap_discover`** Notice when asking for help. When **Extra Discovery Networks** are configured, the Notice includes **`discover_network_rows`** (what you saved) and **`zeroconf_interface_ips`** (what the hub actually bound for mDNS). Grep **`logs/debug.log`** for `HomeKit DISCOVER zeroconf diag` or `network hint`.
 
 Other failures:
 

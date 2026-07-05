@@ -237,38 +237,159 @@ def local_ip_for_discover_network(
             sock.close()
 
 
+def resolve_zeroconf_interface_bind(
+    params: dict[str, Any] | None,
+    log: logging.Logger | None = None,
+) -> tuple[list[str], str]:
+    """Resolve explicit zeroconf ``interfaces=[...]`` IPs and how they were chosen.
+
+    Returns ``(ips, source)`` where ``source`` is one of:
+    ``none``, ``discover_network_rows``, ``auto_primary``, ``auto_primary_outbound``.
+    """
+    if not params:
+        if log is not None:
+            log.debug("zeroconf interface bind: no bridge params; source=none")
+        return [], "none"
+
+    rows = params.get("_discover_networks")
+    if not isinstance(rows, list):
+        rows = []
+
+    if rows:
+        targets: list[str] = []
+        seen: set[str] = set()
+
+        def add_hint(raw: Any) -> None:
+            hint = normalize_discover_network_address(str(raw or "").strip(), log)
+            if not hint:
+                return
+            ip = local_ip_for_discover_network(hint, log)
+            if not ip or ip in seen:
+                if log is not None and hint and not ip:
+                    log.debug(
+                        "zeroconf interface bind: skipped unreachable discover-network hint %s",
+                        hint,
+                    )
+                return
+            seen.add(ip)
+            targets.append(ip)
+
+        primary = params.get("_primary_network_broadcast")
+        if primary:
+            add_hint(primary)
+
+        for row in rows:
+            if isinstance(row, dict):
+                add_hint(row.get("address"))
+
+        if log is not None:
+            log.debug(
+                "zeroconf interface bind: %d IP(s) from Extra Discovery Networks rows: %s",
+                len(targets),
+                targets,
+            )
+        return targets, "discover_network_rows"
+
+    bsdish = sys.platform.startswith(("freebsd", "darwin"))
+    if not bsdish:
+        if log is not None:
+            log.debug(
+                "zeroconf interface bind: no Extra Discovery Networks rows on %s; source=none",
+                sys.platform,
+            )
+        return [], "none"
+
+    ic_env = os.environ.get("HOMEKIT_HUB_ZEROCONF_INTERFACES", "").strip().lower()
+    ic_param = str(params.get("zeroconf_interfaces") or "").strip().lower()
+    if ic_env == "all" or ic_param == "all":
+        if log is not None:
+            log.debug(
+                "zeroconf auto-primary skipped: zeroconf_interfaces=all (env=%r param=%r)",
+                ic_env or None,
+                ic_param or None,
+            )
+        return [], "none"
+
+    primary_bc = str(params.get("_primary_network_broadcast") or "").strip()
+    poly_raw = params.get("_poly_network_interface")
+    poly_addr = ""
+    if isinstance(poly_raw, dict):
+        poly_addr = str(poly_raw.get("addr") or "").strip()
+
+    if primary_bc:
+        ip = local_ip_for_discover_network(primary_bc, log)
+        if ip:
+            if log is not None:
+                log.info(
+                    "zeroconf auto-primary bind: interface IP %s from poly broadcast %s "
+                    "(no Extra Discovery Networks rows; platform=%s)",
+                    ip,
+                    primary_bc,
+                    sys.platform,
+                )
+                if poly_addr and poly_addr != ip:
+                    log.debug(
+                        "zeroconf auto-primary bind: poly network_interface addr %s differs "
+                        "from resolved bind IP %s (common on WiFi / multi-homed hosts)",
+                        poly_addr,
+                        ip,
+                    )
+            return [ip], "auto_primary"
+        if log is not None:
+            log.warning(
+                "zeroconf auto-primary bind failed: could not resolve local IP for primary "
+                "broadcast %s (platform=%s); trying default outbound fallback",
+                primary_bc,
+                sys.platform,
+            )
+    elif log is not None:
+        log.debug(
+            "zeroconf auto-primary: poly.network_interface broadcast unavailable; "
+            "trying default outbound fallback"
+        )
+
+    outbound = default_outbound_ip()
+    if outbound and _ipv4_quads(outbound) is not None:
+        if log is not None:
+            if primary_bc:
+                log.info(
+                    "zeroconf auto-primary outbound fallback: interface IP %s "
+                    "(default route probe; primary broadcast %s did not resolve)",
+                    outbound,
+                    primary_bc,
+                )
+            else:
+                log.info(
+                    "zeroconf auto-primary outbound fallback: interface IP %s "
+                    "(default route probe; no primary broadcast)",
+                    outbound,
+                )
+            if poly_addr and poly_addr != outbound:
+                log.debug(
+                    "zeroconf auto-primary outbound fallback: poly addr %s differs from "
+                    "outbound %s",
+                    poly_addr,
+                    outbound,
+                )
+        return [outbound], "auto_primary_outbound"
+
+    if log is not None:
+        log.warning(
+            "zeroconf auto-primary bind failed: no usable interface IP "
+            "(no Extra Discovery Networks rows; platform=%s; primary_bc=%r)",
+            sys.platform,
+            primary_bc or None,
+        )
+    return [], "none"
+
+
 def resolve_zeroconf_interface_ips(
     params: dict[str, Any] | None,
     log: logging.Logger | None = None,
 ) -> list[str]:
-    """Build explicit zeroconf ``interfaces=[...]`` IPs from typed discover-network rows."""
-    if not params:
-        return []
-    rows = params.get("_discover_networks")
-    if not isinstance(rows, list) or not rows:
-        return []
-    targets: list[str] = []
-    seen: set[str] = set()
-
-    def add_hint(raw: Any) -> None:
-        hint = normalize_discover_network_address(str(raw or "").strip(), log)
-        if not hint:
-            return
-        ip = local_ip_for_discover_network(hint, log)
-        if not ip or ip in seen:
-            return
-        seen.add(ip)
-        targets.append(ip)
-
-    primary = params.get("_primary_network_broadcast")
-    if primary:
-        add_hint(primary)
-
-    for row in rows:
-        if isinstance(row, dict):
-            add_hint(row.get("address"))
-
-    return targets
+    """Build explicit zeroconf ``interfaces=[...]`` IPs (typed rows or BSD auto-primary)."""
+    ips, _source = resolve_zeroconf_interface_bind(params, log)
+    return ips
 
 
 def probe_mdns_port_5353() -> str:
@@ -284,6 +405,145 @@ def probe_mdns_port_5353() -> str:
     except OSError as e:
         return f"socket_error {e!s}"
     return "udp_5353_bind_ok"
+
+
+def default_outbound_ip(rhost: str = "8.8.8.8") -> str | None:
+    """UDP route probe: local IPv4 the kernel would use to reach ``rhost``."""
+    sock: socket.socket | None = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(0.5)
+        sock.connect((rhost, 9))
+        return sock.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        if sock is not None:
+            sock.close()
+
+
+def discover_network_hints(
+    diag: dict[str, Any],
+    *,
+    accessories_found: int | None = None,
+) -> list[str]:
+    """Actionable hints when DISCOVER finds nothing or network bind looks wrong."""
+    hints: list[str] = []
+    platform = str(diag.get("platform") or "")
+    bsdish = platform.startswith(("freebsd", "darwin"))
+
+    iface_ips = diag.get("zeroconf_interface_ips")
+    if not isinstance(iface_ips, list):
+        iface_ips = []
+    discover_rows = int(diag.get("discover_network_rows") or 0)
+
+    mdns_probe = str(diag.get("mdns_5353_probe") or "")
+    using_unicast = bool(diag.get("using_unicast"))
+    hub_running = bool(diag.get("hub_running"))
+    explicit = bool(diag.get("using_explicit_interface_ips"))
+    bind_source = str(diag.get("zeroconf_interface_bind_source") or "none")
+
+    primary_bc = str(diag.get("primary_network_broadcast") or "").strip()
+    default_out = str(diag.get("default_outbound_ip") or "").strip()
+    poly_ni = diag.get("poly_network_interface")
+    poly_addr = ""
+    if isinstance(poly_ni, dict):
+        poly_addr = str(poly_ni.get("addr") or "").strip()
+
+    if accessories_found == 0:
+        hints.append("No HAP accessories appeared in the mDNS scan window.")
+
+    if not hub_running:
+        hints.append(
+            "Hub is not running; wait for the log line 'HomeKit Hub ready' before DISCOVER."
+        )
+
+    if "bind_udp_5353_failed" in mdns_probe and not using_unicast:
+        hints.append(
+            "UDP port 5353 is already in use on this host; try Custom Param "
+            "zeroconf_mode=unicast or auto, then restart the node server."
+        )
+
+    if discover_rows == 0 and bsdish:
+        if bind_source == "none":
+            hints.append(
+                "Automatic primary interface bind failed on this host. Add your IoT/VLAN "
+                "broadcast (e.g. 192.168.x.255) under Custom Typed > Extra Discovery Networks, "
+                "restart the node server, and run DISCOVER again."
+            )
+        elif accessories_found == 0 and bind_source in ("auto_primary", "auto_primary_outbound"):
+            hints.append(
+                "Automatic primary interface bind is active but no devices were found. If "
+                "HomeKit accessories are on a different VLAN/subnet, add that broadcast under "
+                "Custom Typed > Extra Discovery Networks."
+            )
+
+    if discover_rows > 0 and not iface_ips:
+        hints.append(
+            "Extra Discovery Networks rows are set but zeroconf_interface_ips is empty — "
+            "verify each address is on a reachable subnet from this host."
+        )
+
+    if primary_bc and default_out and poly_addr and default_out != poly_addr:
+        hints.append(
+            f"Polisy network_interface addr ({poly_addr}) differs from default outbound IP "
+            f"({default_out}). If HomeKit devices are on the Polisy subnet, add Extra Discovery "
+            "Networks for that VLAN."
+        )
+
+    primary_local = str(diag.get("primary_network_local_ip") or "").strip()
+    if (
+        primary_bc
+        and not primary_local
+        and discover_rows == 0
+        and bind_source == "none"
+    ):
+        hints.append(
+            f"Could not resolve a local bind IP for primary broadcast {primary_bc}; "
+            "add an Extra Discovery Networks row for that subnet."
+        )
+
+    if using_unicast and bsdish and accessories_found == 0:
+        hints.append(
+            "Unicast zeroconf is active; if discovery stays empty, see CONFIG.md / DEBUGGING.md "
+            "for HOMEKIT_HUB_ZEROCONF_* env overrides."
+        )
+
+    if accessories_found == 0 and explicit:
+        hints.append(
+            "Explicit interface bind is active but no devices were found — confirm the accessory "
+            "is in pairing mode, on the same LAN/VLAN, and mDNS is not blocked (firewall/AP isolation)."
+        )
+
+    if accessories_found == 0 and not hints:
+        hints.append(
+            "Confirm pairing mode, same LAN/VLAN, and mDNS not blocked; see CONFIG.md / DEBUGGING.md."
+        )
+
+    return hints
+
+
+def format_zeroconf_diag_log_summary(diag: dict[str, Any]) -> str:
+    """One-line summary for INFO logs during DISCOVER."""
+    poly_ni = diag.get("poly_network_interface")
+    poly_addr = ""
+    if isinstance(poly_ni, dict):
+        poly_addr = poly_ni.get("addr") or ""
+    parts = [
+        f"mode={diag.get('zeroconf_mode')}",
+        f"unicast={diag.get('using_unicast')}",
+        f"bind_source={diag.get('zeroconf_interface_bind_source') or 'none'}",
+        f"explicit_ifaces={diag.get('using_explicit_interface_ips')}",
+        f"iface_ips={diag.get('zeroconf_interface_ips')}",
+        f"discover_rows={diag.get('discover_network_rows')}",
+        f"primary_bc={diag.get('primary_network_broadcast') or ''}",
+        f"primary_local={diag.get('primary_network_local_ip') or ''}",
+        f"poly_addr={poly_addr}",
+        f"outbound_ip={diag.get('default_outbound_ip') or ''}",
+        f"5353={diag.get('mdns_5353_probe')}",
+        f"platform={diag.get('platform')}",
+    ]
+    return "; ".join(str(p) for p in parts)
 
 
 def _hap_service_browser_noop(*_args: Any, **_kwargs: Any) -> None:
@@ -353,12 +613,27 @@ def _zeroconf_ctor_kwargs(
                 sys.platform,
             )
 
-    iface_ips = resolve_zeroconf_interface_ips(params, log)
+    iface_ips, bind_source = resolve_zeroconf_interface_bind(params, log)
     if iface_ips:
         out["interfaces"] = iface_ips
-        log.info(
-            "zeroconf: explicit interface IP bind(s) for DISCOVER/mDNS: %s",
-            ", ".join(iface_ips),
+        if bind_source == "discover_network_rows":
+            log.info(
+                "zeroconf: explicit interface IP bind(s) for DISCOVER/mDNS: %s",
+                ", ".join(iface_ips),
+            )
+        else:
+            log.debug(
+                "zeroconf: applying auto-primary interface IP bind(s) for DISCOVER/mDNS: %s "
+                "(source=%s)",
+                ", ".join(iface_ips),
+                bind_source,
+            )
+    elif sys.platform.startswith(("freebsd", "darwin")):
+        log.debug(
+            "zeroconf: no explicit interface IP bind on %s (source=%s); "
+            "using InterfaceChoice from env/defaults",
+            sys.platform,
+            bind_source,
         )
     return out
 
@@ -2121,19 +2396,44 @@ class HomeKitHubBridge:
             except (AttributeError, TypeError):
                 pass
         params = self._get_params()
-        iface_ips = resolve_zeroconf_interface_ips(params, self.log)
+        iface_ips, bind_source = resolve_zeroconf_interface_bind(params, self.log)
         discover_rows = params.get("_discover_networks")
         if not isinstance(discover_rows, list):
             discover_rows = []
+        discover_addresses: list[str] = []
+        for row in discover_rows:
+            if isinstance(row, dict):
+                addr = str(row.get("address") or "").strip()
+                if addr:
+                    discover_addresses.append(addr)
+        primary_bc = params.get("_primary_network_broadcast")
+        primary_bc_s = str(primary_bc or "").strip()
+        primary_local = (
+            local_ip_for_discover_network(primary_bc_s, self.log) if primary_bc_s else None
+        )
+        poly_raw = params.get("_poly_network_interface")
+        poly_ni: dict[str, str] = {}
+        if isinstance(poly_raw, dict):
+            for key in ("addr", "broadcast", "netmask", "gateway"):
+                val = poly_raw.get(key)
+                if val is not None and str(val).strip():
+                    poly_ni[key] = str(val).strip()
         return {
             "hub_running": self._running,
             "zeroconf_mode": getattr(zcm, "mode_label", "") if zcm else "",
             "using_unicast": bool(zcm.using_unicast) if zcm else False,
+            "using_explicit_interface_ips": bool(iface_ips),
             "hap_browser_count": len(zcm.hap_browsers) if zcm else 0,
             "hap_browser_types": [HAP_TYPE_TCP, HAP_TYPE_UDP],
             "mdns_5353_probe": probe_mdns_port_5353(),
             "discover_network_rows": len(discover_rows),
+            "discover_network_addresses": discover_addresses,
+            "primary_network_broadcast": primary_bc_s,
+            "primary_network_local_ip": primary_local or "",
+            "poly_network_interface": poly_ni,
+            "default_outbound_ip": default_outbound_ip() or "",
             "zeroconf_interface_ips": iface_ips,
+            "zeroconf_interface_bind_source": bind_source,
             "transports_discovery_counts": transports,
             "platform": sys.platform,
             "python_version": sys.version.split()[0],
@@ -2222,10 +2522,12 @@ class HomeKitHubBridge:
             self.log.warning(
                 "aiohomekit Controller has no transports; discovery may be incomplete"
             )
+        diag = self.zeroconf_diag()
         self.log.info(
             "HomeKit discovery (%.1fs window, mDNS _hap._tcp; devices appear as announced)...",
             timeout,
         )
+        self.log.info("Discovery network context: %s", format_zeroconf_diag_log_summary(diag))
         seen_ids: set[str] = set()
         rows: list[dict[str, Any]] = []
         loop = asyncio.get_running_loop()
@@ -2257,6 +2559,8 @@ class HomeKitHubBridge:
             len(rows),
         )
         if not rows:
+            for hint in discover_network_hints(diag, accessories_found=0):
+                self.log.warning("Discovery network hint: %s", hint)
             self.log.warning(
                 "No HAP accessories seen — confirm pairing mode, same LAN/VLAN, mDNS not blocked, "
                 "and (BSD/macOS) see CONFIG.md zeroconf env if using unicast."

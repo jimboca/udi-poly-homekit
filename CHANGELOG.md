@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.12] - 2026-07-05
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Added
+
+- **(Standard + Professional)** **DISCOVER** and **ZEROCONF_DIAG** include compact **Zeroconf / hub diagnostic** output in PG3 Notices and `logs/debug.log` (`HomeKit DISCOVER zeroconf diag:`), with actionable **Suggestions** when the scan finds no accessories.
+- **(Standard + Professional)** **Runtime auto-primary mDNS bind** on FreeBSD/macOS when **Extra Discovery Networks** is empty — binds from `poly.network_interface` (fallback: default outbound IP) without writing configuration.
+- **(Standard + Professional)** Richer **Extra Discovery Networks** typed-parameter descriptions in the Configuration UI (setup hints, address examples, ZEROCONF_DIAG verification).
+
+### Changed
+
+- **(Standard + Professional)** **CONFIG.md** — new Discovery networks (setup) section; quick pairing references Notices and diagnostic output.
+- **(Standard + Professional)** **DEBUGGING.md** — log path (`logs/debug.log`), Notice location, DISCOVER diagnostic markers, auto-primary bind, and network-hint troubleshooting.
+- **(Standard + Professional)** Version **2.0.12** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.11] - 2026-07-04
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
