@@ -26,4 +26,7 @@ Polyglot installs use a **git URL + branch**. This repo uses two remote branches
 - `homekit-poly.py` — entry point
 - `homekit_hub/bridge.py` — aiohomekit + WebSocket (default port **8163**), multi-slot pairing
 - `nodes/Controller.py` — PG3 lifecycle and custom params/data
+- `CONFIG.md` — primary setup guide embedded in the PG3 Configuration UI via `setCustomParamsDoc()`
+- `CONFIG_EXTRA.md` — advanced flat custom params (MQTT, WebSocket, zeroconf); not embedded in PG3 UI
+- **PG3 doc links:** sibling docs linked from `CONFIG.md` must use GitHub `master` blob URLs with HTML `target="_blank"` — relative `.md` links do not work in the Polyglot help panel
 - `PROTOCOL.md` — JSON message contract (`version` **1**)

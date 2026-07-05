@@ -1,6 +1,10 @@
 # HomeKit Hub — configuration
 
-**[Debugging issues](DEBUGGING.md)** — pairing failures, **Discover** not adding rows, status **Disconnected**, logs, and what to send support.
+<a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/DEBUGGING.md" target="_blank" rel="noopener noreferrer">Debugging issues</a> — pairing failures, **Discover** not adding rows, status **Disconnected**, logs, and what to send support.
+
+*Advanced flat parameters (MQTT, WebSocket, zeroconf) →* <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/CONFIG_EXTRA.md" target="_blank" rel="noopener noreferrer">CONFIG_EXTRA.md</a>
+
+**Upgrading to 2.0.13+:** on first start after upgrade, a **one-time** cleanup removes advanced Custom Params still at shipped defaults from the Configuration table (runtime behavior unchanged). Customized values are kept. Re-adding a param manually afterward is never auto-removed.
 
 ---
 
@@ -12,7 +16,7 @@ This guide is ordered for every install:
 2. **[Professional edition](#professional-edition)** — optional hub-only IoX control and device inventory (skip if you use a vendor plugin below).
 3. **[Ecobee + udi-poly-ecobee](#ecobee--udi-poly-ecobee)** — pair on this hub first, then install the Ecobee Node Server.
 
-On a typical Polisy / eISY install, **leave MQTT, WebSocket, and zeroconf settings at their defaults**. You only need to change **`mqtt_hub_slug`** if multiple HomeKit hubs share one MQTT broker.
+On a typical Polisy / eISY install, **leave MQTT, WebSocket, and zeroconf at their defaults** — see <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/CONFIG_EXTRA.md" target="_blank" rel="noopener noreferrer">CONFIG_EXTRA.md</a> only when you need multi-hub slugs, custom broker bind, or mDNS troubleshooting.
 
 ---
 
@@ -57,7 +61,7 @@ Use this when HomeKit accessories live on a **different subnet/VLAN** than the P
 
 **Verify without extra rows (single LAN):** run **DISCOVER** or **ZEROCONF_DIAG** and check the Notice or `logs/debug.log` for `bind_source=auto_primary` and `iface_ips=[…]` matching the Polisy primary IP.
 
-**Still no devices?** Confirm routing and firewall rules allow mDNS (UDP 5353) between VLANs, disable AP client isolation on Wi‑Fi, and see [DEBUGGING.md — IoT / separate VLAN](DEBUGGING.md#iot--separate-vlan--extra-discovery-networks).
+**Still no devices?** Confirm routing and firewall rules allow mDNS (UDP 5353) between VLANs, disable AP client isolation on Wi‑Fi, and see <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/DEBUGGING.md#iot--separate-vlan--extra-discovery-networks" target="_blank" rel="noopener noreferrer">DEBUGGING.md — IoT / separate VLAN</a>.
 
 Full field reference: [Extra Discovery Networks](#extra-discovery-networks-networks).
 
@@ -161,31 +165,16 @@ This hub flow has been tested primarily with **Ecobee thermostats**. Other HomeK
 ### After pairing on the hub
 
 1. Confirm the hub is ready (**ST** `1`, **GV0** `1`, **GV1** `2` on the controller) — see [Verify the hub is ready](#verify-the-hub-is-ready).
-2. Leave **`mqtt_enable`** `true` and **`mqtt_hub_slug`** `default` unless you run multiple hubs on one broker.
+2. Leave MQTT at defaults unless you run multiple hubs on one broker — see <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/CONFIG_EXTRA.md#mqtt_hub_slug" target="_blank" rel="noopener noreferrer">CONFIG_EXTRA.md — mqtt_hub_slug</a>.
 3. Install **udi-poly-ecobee** and follow its [CONFIG.md — Ecobee quick start](https://github.com/UniversalDevicesInc-PG3/udi-poly-ecobee/blob/master/CONFIG.md#ecobee-quick-start-homekit).
 
 On **Professional**, leave **generic_nodes_enable** and **Create generic IoX control nodes (Professional)** **off** on Ecobee rows unless you intentionally want duplicate thermostat nodes in IoX.
 
 ---
 
-## Defaults you can ignore
-
-Most users never change these. Only touch them when you have a specific reason (multiple hubs, custom broker, or support asked you to).
-
-| Parameter | Default | Change only when… |
-|-----------|---------|-------------------|
-| `mqtt_enable` | `true` | You intentionally want WebSocket-only (not recommended for Ecobee). |
-| `mqtt_host` / `mqtt_port` | `localhost` / `1884` | Your MQTT broker is not the Polisy/eISY general broker. |
-| `mqtt_hub_slug` | `default` | Multiple HomeKit hubs share one broker (must match Ecobee **`hk_mqtt_hub_slug`**). |
-| `ws_host` / `ws_port` | `127.0.0.1` / `8163` | WebSocket fallback client needs a non-default bind or port. |
-| `ws_token` | *(empty)* | You want a shared secret on the WebSocket API. |
-| `zeroconf_*` | shipped defaults | mDNS / discover troubleshooting only. |
-
----
-
 ## Troubleshooting
 
-See **[DEBUGGING.md](DEBUGGING.md)** for step-by-step diagnosis (hub not ready, **Discover** with no rows, LAN/mDNS, Ecobee pairing, logs, and support checklist).
+See <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/DEBUGGING.md" target="_blank" rel="noopener noreferrer">DEBUGGING.md</a> for step-by-step diagnosis (hub not ready, **Discover** with no rows, LAN/mDNS, Ecobee pairing, logs, and support checklist).
 
 ### DISCOVER finds no accessories (empty pairing row)
 
@@ -194,7 +183,7 @@ Symptoms: **DISCOVER** completes but Notices say **no accessories found**; typed
 1. Confirm the accessory is in **HomeKit pairing mode** and **unpaired** from Apple Home.
 2. Confirm Polisy and the accessory are on the **same routable LAN** (or add the IoT subnet under **Extra Discovery Networks** — see [Quick pairing](#quick-pairing-discover) step 3).
 3. Run **ZEROCONF_DIAG**; check `zeroconf_interface_ips` when extra networks are configured.
-4. If still empty, try Custom Params **`zeroconf_interfaces=all`** or **`zeroconf_unicast=auto`**, save, wait for bridge restart, then **DISCOVER** again.
+4. If still empty, try advanced zeroconf params — see <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/CONFIG_EXTRA.md#zeroconf_unicast" target="_blank" rel="noopener noreferrer">CONFIG_EXTRA.md</a> (`zeroconf_interfaces=all` or `zeroconf_unicast=auto`), save, wait for bridge restart, then **DISCOVER** again.
 5. Enter **hap_pin** only **after** a successful **DISCOVER** prefilled id/name (or type **accessory_id** / **accessory_name** manually on a manual row).
 
 ### Accessory shows "already paired"
@@ -251,29 +240,19 @@ On Node Server start, the controller clears all Notices before loading.
 
 ---
 
-## Reference: Custom Configuration Parameters
+## Custom params you may change
 
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `ws_host` | No | WebSocket bind address. Default `127.0.0.1`. |
-| `ws_port` | No | WebSocket port. Default `8163`. |
-| `ws_token` | No | Optional shared secret for the WebSocket API. **Leave empty** (default) for no auth. When set, clients must send the same value on `hello` as JSON field **`token`** or **`ws_token`** before any other action; see `PROTOCOL.md`. **Does not apply to MQTT** (v1: no application-level MQTT secret; use broker ACLs). |
-| `mqtt_enable` | No | `true` / `false` (string). When `true`, the hub connects to the LAN MQTT broker and subscribes to per-client ingress topics (see `PROTOCOL.md` MQTT section). Default `true`. |
-| `mqtt_host` | No | MQTT broker hostname or IP. Default `localhost`. |
-| `mqtt_port` | No | MQTT broker port. Default `1884` (Polisy/eISY general MQTT / PG3-style broker). |
-| `mqtt_username` | No | Optional broker username (when the broker requires authentication). |
-| `mqtt_password` | No | Optional broker password (when the broker requires authentication). |
-| `mqtt_hub_slug` | No | Topic segment after `udi/homekit/hubs/` identifying this hub instance (broker-safe slug). Default `default`. Change when multiple hubs share one broker. |
-| `zeroconf_unicast` | No | `on` (default), `auto`, or `off`. **`on`** uses python-zeroconf unicast mode (typical on eISY and other hosts where UDP **5353** is already owned). **`auto`** tries multicast first, then falls back on “address in use”. **`off`** forces multicast only (fails if 5353 is taken). **Most installs never change this.** |
-| `zeroconf_interfaces` | No | `default`, `all`, or leave empty. Optional narrowing for BSD/macOS unicast quirks (errno **49**). **Usually leave empty.** |
-| `zeroconf_ip_version` | No | `v4`, `v6`, `all`, or leave empty. **Usually leave empty.** |
-| `change_node_names` | No | `true` (default) or `false` (string). When `true`, IoX **renames** paired-device child nodes so titles track **`last_hap_discover`** and Custom Typed pairing rows. When `false`, the plugin keeps the IoX database name if it differs. Same idea as **udi-poly-kasa**. |
-| `generic_nodes_enable` | No | **Professional:** `false` (default) or `true`. Master switch for generic IoX child nodes. Also requires **Create generic IoX control nodes (Professional)** on the pairing row in Custom Typed. See [PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md). |
-| `hk_heat_cool_min_delta` | No | **Professional:** minimum heat/cool gap in °F when writing thermostat thresholds (default `3`). |
+These three flat params are shown in **Custom Configuration Parameters**. Advanced transport and mDNS keys are in <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/CONFIG_EXTRA.md" target="_blank" rel="noopener noreferrer">CONFIG_EXTRA.md</a>.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `generic_nodes_enable` | `false` | **Professional:** master switch for generic IoX child nodes. Also requires **Create generic IoX control nodes (Professional)** on the pairing row in Custom Typed. See [PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md). |
+| `change_node_names` | `true` | When `true`, IoX **renames** paired-device child nodes so titles track **`last_hap_discover`** and Custom Typed pairing rows. When `false`, the plugin keeps the IoX database name if it differs. Same idea as **udi-poly-kasa**. |
+| `hk_heat_cool_min_delta` | `3` | **Professional:** minimum heat/cool gap in °F when writing thermostat thresholds (default `3`). |
+
+**Multi-hub / Ecobee slug match:** when several HomeKit hubs share one MQTT broker, set **`mqtt_hub_slug`** manually per <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/CONFIG_EXTRA.md#mqtt_hub_slug" target="_blank" rel="noopener noreferrer">CONFIG_EXTRA.md</a> (default `default`; not shown in the UI unless you add it).
 
 **Professional device inventory:** JSON files are written to `persistent/<device_id>.json` on pair and health recovery. Use **Export device inventory** on a paired device node or include `persistent/` via **Download Log Package** (not excluded from support zips).
-
-**Zeroconf parameters:** On a normal Polisy / eISY deployment you can ignore the three `zeroconf_*` keys entirely. The controller command **Zeroconf diagnostic** (`ZEROCONF_DIAG`) logs a snapshot for support. After changing `zeroconf_*` or WebSocket bind settings, save configuration; the hub restarts the asyncio bridge automatically.
 
 ---
 
@@ -352,21 +331,11 @@ Vendor QR codes often encode **`X-HM://`**. The hub still needs the **numeric** 
 
 ### WebSocket and MQTT protocol
 
-See `PROTOCOL.md`. When **`mqtt_enable`** is `true`, the hub exposes the same JSON on MQTT and WebSocket. WebSocket remains available in parallel.
+See `PROTOCOL.md`. When **`mqtt_enable`** is `true` (default), the hub exposes the same JSON on MQTT and WebSocket. WebSocket remains available in parallel. Transport and zeroconf tuning: <a href="https://github.com/jimboca/udi-poly-homekit-hub/blob/master/CONFIG_EXTRA.md" target="_blank" rel="noopener noreferrer">CONFIG_EXTRA.md</a>.
 
 ### Security
 
-WebSocket binds to `127.0.0.1` by default. **MQTT (v1):** no application-level secret like **`ws_token`**; use broker authentication, ACLs, and a private LAN.
-
-### Environment (optional)
-
-Override Custom Params `zeroconf_*` for the Node Server process. Typical users do not set these.
-
-| Variable | Values | Purpose |
-|----------|--------|---------|
-| `HOMEKIT_HUB_ZEROCONF_UNICAST` | `1` / `true` / `yes` / `on` or `0` / `false` / `off` | Force unicast or multicast. |
-| `HOMEKIT_HUB_ZEROCONF_INTERFACES` | `default` / `all` | Interface selection for zeroconf. |
-| `HOMEKIT_HUB_ZEROCONF_IP_VERSION` | `v4` / `v6` / `all` | IP stack for zeroconf. |
+WebSocket binds to `127.0.0.1` by default. **MQTT (v1):** no application-level secret like **`ws_token`**; use broker authentication, ACLs, and a private LAN. Details in CONFIG_EXTRA.md.
 
 ### Multiple WebSocket clients
 

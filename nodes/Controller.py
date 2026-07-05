@@ -104,6 +104,20 @@ _DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
     "hk_heat_cool_min_delta": "3",
 }
 
+_DOCS_REPO_BASE = "https://github.com/jimboca/udi-poly-homekit-hub/blob/master"
+
+_UI_SEED_CUSTOM_PARAMS: dict[str, str] = {
+    "generic_nodes_enable": _DEFAULT_BRIDGE_PARAMS["generic_nodes_enable"],
+    "change_node_names": _DEFAULT_BRIDGE_PARAMS["change_node_names"],
+    "hk_heat_cool_min_delta": _DEFAULT_BRIDGE_PARAMS["hk_heat_cool_min_delta"],
+}
+
+_ADVANCED_CUSTOM_PARAMS: frozenset[str] = frozenset(
+    k for k in _DEFAULT_BRIDGE_PARAMS if k not in _UI_SEED_CUSTOM_PARAMS
+)
+
+_DATA_KEY_CUSTOM_PARAMS_DEFAULT_PRUNE_DONE = "custom_params_default_prune_done"
+
 _DEFAULT_PAIRING_GENERIC_NODES = "false"
 
 # Custom Params that affect the hub MQTT transport. They must be included in
@@ -155,6 +169,18 @@ def _coerce_bool_param(val: Any, *, default: bool = False) -> bool:
     if s in ("true", "1", "yes", "on"):
         return True
     return default
+
+
+def _custom_param_matches_default(key: str, val: Any, default: str) -> bool:
+    """True when stored Custom Param value equals the shipped default (normalized)."""
+    _ = key
+    d = str(default).strip()
+    if val is None:
+        return not d
+    s = str(val).strip()
+    if not s:
+        return not d
+    return s.lower() == d.lower()
 
 
 def _alpha_key_from_index(n: int) -> str:
@@ -905,7 +931,9 @@ class Controller(Node):
                 log_message="HomeKit bridge failed to start",
                 extra_html=(
                     "If the error mentions <code>zeroconf</code> / port <b>5353</b>, another mDNS stack "
-                    "may own that port. See <b>CONFIG.md</b> — Custom Params "
+                    "may own that port. See "
+                    f'<a href="{_DOCS_REPO_BASE}/CONFIG_EXTRA.md" target="_blank" '
+                    'rel="noopener noreferrer">CONFIG_EXTRA.md</a> — '
                     "<code>zeroconf_*</code> (default keeps unicast-friendly behavior on shared mDNS hosts); "
                     "environment variables override those when set. On Linux with Avahi, "
                     "<code>disallow-other-stacks=no</code> in <code>avahi-daemon.conf</code> can help.<br/>"
@@ -1064,6 +1092,7 @@ class Controller(Node):
         self._maybe_clear_hap_discover_notice_for_paired()
         self._maybe_clear_pairing_error_notice_for_success()
         self.handler_data_st = True
+        self._maybe_prune_default_custom_params_once()
         # %% professional-only begin
         self._resync_all_generic_nodes()
         # %% professional-only end
@@ -1521,11 +1550,12 @@ class Controller(Node):
         self.change_node_names = _coerce_change_node_names(raw)
 
     def _ensure_default_custom_params(self) -> None:
-        """Polyglot only shows Custom Params that exist in saved config; seed new keys (Kasa pattern).
+        """Polyglot only shows Custom Params that exist in saved config; seed UI keys (Kasa pattern).
 
         Without this, keys added in a plugin upgrade never appear in the PG3 editor until typed manually.
+        Advanced keys are documented in CONFIG_EXTRA.md and are not auto-seeded.
         """
-        for key, default in _DEFAULT_BRIDGE_PARAMS.items():
+        for key, default in _UI_SEED_CUSTOM_PARAMS.items():
             if key in self.Params:
                 continue
             try:
@@ -1538,15 +1568,57 @@ class Controller(Node):
             except Exception:
                 LOGGER.exception("Failed to seed default Custom Param %s", key)
 
+    def _maybe_prune_default_custom_params_once(self) -> None:
+        """One-time migration: remove advanced Custom Params still at shipped defaults."""
+        if not self.handler_data_st or not self.handler_params_st:
+            return
+        try:
+            if _coerce_bool_param(
+                self.Data.get(_DATA_KEY_CUSTOM_PARAMS_DEFAULT_PRUNE_DONE),
+                default=False,
+            ):
+                return
+        except Exception:
+            LOGGER.debug("customdata prune flag check failed", exc_info=True)
+            return
+
+        for key in _ADVANCED_CUSTOM_PARAMS:
+            if key not in self.Params:
+                continue
+            try:
+                raw = self.Params.get(key)
+            except Exception:
+                continue
+            default = _DEFAULT_BRIDGE_PARAMS.get(key, "")
+            if not _custom_param_matches_default(key, raw, default):
+                continue
+            try:
+                self.Params.delete(key)
+                LOGGER.info(
+                    "Pruned default Custom Param %s (one-time migration; see CONFIG_EXTRA.md to re-add)",
+                    key,
+                )
+            except Exception:
+                LOGGER.exception("Failed to prune Custom Param %s", key)
+
+        try:
+            self.Data[_DATA_KEY_CUSTOM_PARAMS_DEFAULT_PRUNE_DONE] = "true"
+        except Exception:
+            LOGGER.exception(
+                "Failed to record %s in customdata",
+                _DATA_KEY_CUSTOM_PARAMS_DEFAULT_PRUNE_DONE,
+            )
+
     def handler_params(self, params):
         LOGGER.debug("customparams: %s", params)
         self.Params.load(params)
+        self.handler_params_st = True
+        self._maybe_prune_default_custom_params_once()
         self._ensure_default_custom_params()
         self._refresh_change_node_names_flag()
         # %% professional-only begin
         self._update_edition()
         # %% professional-only end
-        self.handler_params_st = True
         self._maybe_restart_on_config_change()
         if self.handler_typed_data_st:
             self._sync_paired_nodes_from_data()

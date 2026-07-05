@@ -248,7 +248,7 @@ Symptoms: **Discover** Notice lists the device under **Already paired elsewhere*
 | **Bridge Status** | **Error** | Read Notices and `debug.log` |
 | **Hub error code** | **Bridge start failed** | Often mDNS / UDP port **5353** conflict |
 
-On Polisy/eISY, leave **`zeroconf_unicast`** at default **`on`** unless support directs otherwise. See [CONFIG.md — zeroconf parameters](CONFIG.md#reference-custom-configuration-parameters).
+On Polisy/eISY, leave **`zeroconf_unicast`** at default **`on`** unless support directs otherwise. See [CONFIG_EXTRA.md — zeroconf parameters](CONFIG_EXTRA.md#zeroconf_unicast).
 
 Run **ZEROCONF_DIAG** and include the **`zeroconf_diag`** or **`hap_discover`** Notice when asking for help. When **Extra Discovery Networks** are configured, the Notice includes **`discover_network_rows`** (what you saved) and **`zeroconf_interface_ips`** (what the hub actually bound for mDNS). Grep **`logs/debug.log`** for `HomeKit DISCOVER zeroconf diag` or `network hint`.
 
@@ -347,6 +347,7 @@ All values shown on the controller as **Hub error code**:
 
 ## Related documentation
 
-- [CONFIG.md](CONFIG.md) — setup, parameters, pairing flow
+- [CONFIG.md](CONFIG.md) — setup, pairing flow, UI-seeded custom params
+- [CONFIG_EXTRA.md](CONFIG_EXTRA.md) — advanced MQTT, WebSocket, and zeroconf parameters
 - [PROTOCOL.md](PROTOCOL.md) — WebSocket/MQTT API for integrators
 - [udi-poly-ecobee CONFIG.md](https://github.com/UniversalDevicesInc-PG3/udi-poly-ecobee/blob/master/CONFIG.md) — after the hub is paired

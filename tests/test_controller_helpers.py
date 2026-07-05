@@ -7,7 +7,13 @@ from unittest.mock import MagicMock
 
 from homekit_hub.bridge import DATA_KEY_LAST_HAP_DISCOVER, TYPED_PAIRING_SLOTS_KEY
 from node_funcs import generic_node_address
-from nodes.Controller import ERR_ASYNC_LOOP_DEAD, Controller, _DEFAULT_BRIDGE_PARAMS
+from nodes.Controller import (
+    ERR_ASYNC_LOOP_DEAD,
+    Controller,
+    _DATA_KEY_CUSTOM_PARAMS_DEFAULT_PRUNE_DONE,
+    _DEFAULT_BRIDGE_PARAMS,
+    _UI_SEED_CUSTOM_PARAMS,
+)
 from nodes.SensorNode import SensorNode
 
 
@@ -37,6 +43,9 @@ class FakeData:
     def get(self, key, default=None):
         return self._d.get(key, default)
 
+    def __setitem__(self, key, value):
+        self._d[key] = value
+
 
 class FakeParams:
     def __init__(self, d: dict | None = None):
@@ -50,6 +59,15 @@ class FakeParams:
 
     def __setitem__(self, key, value):
         self._d[key] = value
+
+    def keys(self):
+        return self._d.keys()
+
+    def __getitem__(self, key):
+        return self._d[key]
+
+    def delete(self, key):
+        self._d.pop(key, None)
 
 
 def _bare_controller():
@@ -89,9 +107,80 @@ def test_ensure_default_custom_params_seeds_missing_keys():
     c = _bare_controller()
     c.Params = FakeParams({"ws_host": "127.0.0.1"})
     c._ensure_default_custom_params()
-    for key in _DEFAULT_BRIDGE_PARAMS:
+    for key in _UI_SEED_CUSTOM_PARAMS:
         assert key in c.Params
     assert c.Params.get("change_node_names") == "true"
+    assert "ws_port" not in c.Params
+
+
+def test_bridge_get_params_returns_defaults_for_unseeded_keys():
+    c = _bare_controller()
+    c.Params = FakeParams({"generic_nodes_enable": "false"})
+    c.TypedData = FakeTypedData({})
+    c.poly = MagicMock()
+    c.poly.network_interface = {}
+    out = c._bridge_get_params()
+    assert out["ws_port"] == _DEFAULT_BRIDGE_PARAMS["ws_port"]
+    assert out["mqtt_hub_slug"] == "default"
+
+
+def test_prune_default_custom_params_removes_advanced_at_default():
+    c = _bare_controller()
+    c.handler_data_st = True
+    c.handler_params_st = True
+    c.Params = FakeParams(
+        {
+            "ws_host": "127.0.0.1",
+            "mqtt_hub_slug": "default",
+            "generic_nodes_enable": "false",
+            "change_node_names": "true",
+            "hk_heat_cool_min_delta": "3",
+        }
+    )
+    c.Data = FakeData({})
+    c._maybe_prune_default_custom_params_once()
+    assert "ws_host" not in c.Params
+    assert "mqtt_hub_slug" not in c.Params
+    assert c.Data.get(_DATA_KEY_CUSTOM_PARAMS_DEFAULT_PRUNE_DONE) == "true"
+
+
+def test_prune_default_custom_params_keeps_customized():
+    c = _bare_controller()
+    c.handler_data_st = True
+    c.handler_params_st = True
+    c.Params = FakeParams({"mqtt_port": "9999", "generic_nodes_enable": "false"})
+    c.Data = FakeData({})
+    c._maybe_prune_default_custom_params_once()
+    assert c.Params.get("mqtt_port") == "9999"
+    assert c.Data.get(_DATA_KEY_CUSTOM_PARAMS_DEFAULT_PRUNE_DONE) == "true"
+
+
+def test_prune_default_custom_params_skipped_when_flag_set():
+    c = _bare_controller()
+    c.handler_data_st = True
+    c.handler_params_st = True
+    c.Params = FakeParams({"ws_host": "127.0.0.1"})
+    c.Data = FakeData({_DATA_KEY_CUSTOM_PARAMS_DEFAULT_PRUNE_DONE: "true"})
+    c._maybe_prune_default_custom_params_once()
+    assert "ws_host" in c.Params
+
+
+def test_prune_default_custom_params_never_prunes_ui_seed():
+    c = _bare_controller()
+    c.handler_data_st = True
+    c.handler_params_st = True
+    c.Params = FakeParams(
+        {
+            "generic_nodes_enable": "false",
+            "change_node_names": "true",
+            "hk_heat_cool_min_delta": "3",
+            "ws_host": "127.0.0.1",
+        }
+    )
+    c.Data = FakeData({})
+    c._maybe_prune_default_custom_params_once()
+    for key in _UI_SEED_CUSTOM_PARAMS:
+        assert key in c.Params
 
 
 def test_custom_handlers_have_run_false_until_all_set():

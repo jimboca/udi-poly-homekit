@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.13] - 2026-07-05
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Added
+
+- **(Standard + Professional)** **CONFIG_EXTRA.md** — advanced Custom Configuration Parameters (MQTT, WebSocket, zeroconf), environment overrides, and how to add keys manually in PG3.
+- **(Standard + Professional)** One-time migration on upgrade: remove advanced Custom Params still at shipped defaults; tracked in customdata so re-added keys are never pruned again.
+
+### Changed
+
+- **(Standard + Professional)** **CONFIG.md** — slimmed to pairing, typed setup, and three UI-seeded flat params (`generic_nodes_enable`, `change_node_names`, `hk_heat_cool_min_delta`); links to CONFIG_EXTRA and DEBUGGING use GitHub `master` URLs (new tab) for the PG3 Configuration help panel.
+- **(Standard + Professional)** Custom Params seeding — only UI params are auto-seeded; advanced keys resolve at runtime from defaults via `_bridge_get_params()`.
+- **(Standard + Professional)** **DEBUGGING.md** — zeroconf tuning references CONFIG_EXTRA.md.
+- **(Standard + Professional)** Version **2.0.13** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.12] - 2026-07-05
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.

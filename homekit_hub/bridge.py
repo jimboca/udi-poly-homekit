@@ -505,7 +505,7 @@ def discover_network_hints(
 
     if using_unicast and bsdish and accessories_found == 0:
         hints.append(
-            "Unicast zeroconf is active; if discovery stays empty, see CONFIG.md / DEBUGGING.md "
+            "Unicast zeroconf is active; if discovery stays empty, see CONFIG_EXTRA.md / DEBUGGING.md "
             "for HOMEKIT_HUB_ZEROCONF_* env overrides."
         )
 
@@ -517,7 +517,7 @@ def discover_network_hints(
 
     if accessories_found == 0 and not hints:
         hints.append(
-            "Confirm pairing mode, same LAN/VLAN, and mDNS not blocked; see CONFIG.md / DEBUGGING.md."
+            "Confirm pairing mode, same LAN/VLAN, and mDNS not blocked; see CONFIG_EXTRA.md / DEBUGGING.md."
         )
 
     return hints
@@ -2563,7 +2563,7 @@ class HomeKitHubBridge:
                 self.log.warning("Discovery network hint: %s", hint)
             self.log.warning(
                 "No HAP accessories seen — confirm pairing mode, same LAN/VLAN, mDNS not blocked, "
-                "and (BSD/macOS) see CONFIG.md zeroconf env if using unicast."
+                "and (BSD/macOS) see CONFIG_EXTRA.md zeroconf env if using unicast."
             )
         return rows
 
