@@ -967,7 +967,7 @@ def test_mqtt_transport_lost_suppressed_during_planned_restart():
 
 def test_clear_legacy_embedded_hap_discover_notice():
     c = _bare_controller()
-    c.Notices = {f"hap_discover": f"<b>{_LEGACY_HAP_DISCOVER_MARKER}</b><br/>old"}
+    c.Notices = {"hap_discover": f"<b>{_LEGACY_HAP_DISCOVER_MARKER}</b><br/>old"}
     c._clear_legacy_embedded_hap_discover_notice()
     assert "hap_discover" not in c.Notices
 
