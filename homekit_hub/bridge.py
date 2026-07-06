@@ -531,6 +531,40 @@ def format_discover_probe_override_label(override: dict[str, str]) -> str:
     return ", ".join(parts) if parts else "(none)"
 
 
+def format_probe_success_explanation(
+    diag: dict[str, Any],
+    override: dict[str, str],
+) -> str:
+    """One-line explanation of why an ephemeral probe fix was needed."""
+    label = format_discover_probe_override_label(override)
+    bind_source = str(diag.get("zeroconf_interface_bind_source") or "")
+    iface_ips = diag.get("zeroconf_interface_ips") or []
+    if bind_source in ("auto_primary", "auto_primary_outbound") and iface_ips:
+        ips = ", ".join(str(x) for x in iface_ips)
+        return (
+            f"Primary scan used {bind_source} bind on {ips} only; "
+            f"{label} was required on this host."
+        )
+    if bind_source == "none" and override.get("zeroconf_interfaces") == "all":
+        return (
+            f"Primary scan had no interface bind; {label} enables discovery on this host."
+        )
+    return f"Alternate bind probe succeeded; saved Custom Param(s): {label}."
+
+
+def discover_primary_timeout_sec(
+    params: dict[str, Any] | None,
+    diag: dict[str, Any],
+    *,
+    default_sec: float = 12.0,
+    shortened_sec: float = 6.0,
+) -> float:
+    """Primary DISCOVER window; shorter when alternate-bind probes are likely."""
+    if ephemeral_discover_probe_overrides(params or {}, diag):
+        return shortened_sec
+    return default_sec
+
+
 def ephemeral_discover_probe_overrides(
     params: dict[str, Any] | None,
     diag: dict[str, Any],
@@ -563,14 +597,13 @@ def discover_probe_hints(
     attempt_history: list[dict[str, Any]],
     *,
     auto_applied_override: dict[str, str] | None = None,
+    primary_diag: dict[str, Any] | None = None,
 ) -> list[str]:
     """Hints from ephemeral DISCOVER probe attempt history."""
     hints: list[str] = []
     if auto_applied_override:
         hints.append(
-            "Alternate bind probe succeeded; saved Custom Param(s): "
-            f"{format_discover_probe_override_label(auto_applied_override)}. "
-            "The bridge is restarting to apply them permanently."
+            format_probe_success_explanation(primary_diag or {}, auto_applied_override)
         )
         return hints
     if not attempt_history:

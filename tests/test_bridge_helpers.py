@@ -35,9 +35,11 @@ from homekit_hub.bridge import (
     resolve_zeroconf_interface_bind,
     default_outbound_ip,
     discover_network_hints,
+    discover_primary_timeout_sec,
     discover_probe_hints,
     ephemeral_discover_probe_overrides,
     format_discover_attempt_history_html,
+    format_probe_success_explanation,
     format_zeroconf_diag_log_summary,
 )
 
@@ -882,11 +884,42 @@ def test_ephemeral_discover_probe_overrides_unicast_off():
 
 
 def test_discover_probe_hints_auto_applied():
+    diag = {
+        "zeroconf_interface_bind_source": "auto_primary",
+        "zeroconf_interface_ips": ["192.168.1.25"],
+    }
     hints = discover_probe_hints(
         [],
         auto_applied_override={"zeroconf_interfaces": "all"},
+        primary_diag=diag,
     )
+    assert any("auto_primary bind on 192.168.1.25" in h for h in hints)
     assert any("zeroconf_interfaces=all" in h for h in hints)
+
+
+def test_format_probe_success_explanation_auto_primary():
+    diag = {
+        "zeroconf_interface_bind_source": "auto_primary",
+        "zeroconf_interface_ips": ["192.168.1.25"],
+    }
+    text = format_probe_success_explanation(diag, {"zeroconf_interfaces": "all"})
+    assert "192.168.1.25" in text
+    assert "zeroconf_interfaces=all" in text
+
+
+def test_discover_primary_timeout_sec_shortened_on_bsd():
+    params = {"zeroconf_unicast": "on", "zeroconf_interfaces": ""}
+    diag = {
+        "platform": "freebsd14",
+        "zeroconf_interface_bind_source": "auto_primary",
+    }
+    assert discover_primary_timeout_sec(params, diag, default_sec=12.0, shortened_sec=6.0) == 6.0
+
+
+def test_discover_primary_timeout_sec_default_when_no_probes():
+    params = {"zeroconf_unicast": "auto", "zeroconf_interfaces": "all"}
+    diag = {"platform": "freebsd14", "zeroconf_interface_bind_source": "none"}
+    assert discover_primary_timeout_sec(params, diag, default_sec=12.0, shortened_sec=6.0) == 12.0
 
 
 def test_discover_probe_hints_all_failed():

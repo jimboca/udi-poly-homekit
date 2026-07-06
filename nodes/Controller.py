@@ -30,6 +30,7 @@ from homekit_hub.bridge import (
     DATA_KEY_DISCOVER_ZEROCONF_AUTO_APPLIED,
     _parse_slot_value,
     discover_network_hints,
+    discover_primary_timeout_sec,
     discover_probe_ephemeral,
     discover_probe_hints,
     ephemeral_discover_probe_overrides,
@@ -86,8 +87,11 @@ ERR_ASYNC_LOOP_DEAD = 10
 ERR_PAIRING_HEALTH = 11
 
 _DISCOVER_PRIMARY_TIMEOUT_SEC = 12.0
+_DISCOVER_PRIMARY_SHORT_TIMEOUT_SEC = 6.0
 _DISCOVER_PROBE_TIMEOUT_SEC = 6.0
+_DISCOVER_PROGRESS_TICK_SEC = 2.0
 _ZEROCONF_PROBE_PARAM_KEYS = ("zeroconf_unicast", "zeroconf_interfaces")
+_LEGACY_HAP_DISCOVER_MARKER = "Zeroconf / hub diagnostic"
 
 # Merged into Custom Params before the bridge reads them (PG3 may omit unset keys).
 _DEFAULT_BRIDGE_PARAMS: dict[str, str] = {
@@ -238,6 +242,9 @@ class Controller(Node):
         self.change_node_names = True
         self._discover_notice_token = 0
         self._discover_restart_notice_pending = False
+        self._discover_restart_started_at: float | None = None
+        self._discover_progress_last_html: str | None = None
+        self._planned_bridge_restart = False
         self._node_key_next_index_cache: Optional[int] = None
         self._mqtt_transport_driver = MQTT_TRANSPORT_STATUS_DISABLED
         # %% professional-only begin
@@ -436,6 +443,7 @@ class Controller(Node):
         *,
         attempt_history: list[dict[str, Any]] | None = None,
         probe_auto_applied: dict[str, str] | None = None,
+        primary_diag: dict[str, Any] | None = None,
     ) -> str:
         """User-facing discover notice extras (no zeroconf technical snapshot)."""
         parts: list[str] = []
@@ -445,6 +453,7 @@ class Controller(Node):
         hints = discover_probe_hints(
             attempt_history or [],
             auto_applied_override=probe_auto_applied,
+            primary_diag=primary_diag,
         )
         if hints:
             parts.append("<b>Suggestions:</b><ul>")
@@ -672,27 +681,35 @@ class Controller(Node):
         self._apply_mqtt_transport_driver(code)
         if mqtt_transport_enabled(self._bridge_get_params()) and prev == MQTT_TRANSPORT_STATUS_CONNECTED:
             if code == MQTT_TRANSPORT_STATUS_NOT_CONNECTED:
-                self._pg3_warn_and_notice(
-                    "homekit_mqtt_transport_lost",
-                    title="HomeKit hub MQTT session lost",
-                    log_message="HomeKit hub MQTT transport dropped from connected to not connected (broker/hub/network).",
-                    notice_html=(
-                        "<p>The hub lost its MQTT subscription or broker session while <code>mqtt_enable</code> "
-                        "is on. Clients publishing to ingress topics may fail until the hub reconnects. Check the "
-                        "broker, ACLs, and <b>udi-poly-homekit-hub</b> logs.</p>"
-                    ),
-                )
+                if self._planned_bridge_restart or self._discover_restart_notice_pending:
+                    LOGGER.debug(
+                        "MQTT transport dropped during planned bridge restart; "
+                        "suppressing homekit_mqtt_transport_lost notice"
+                    )
+                else:
+                    self._pg3_warn_and_notice(
+                        "homekit_mqtt_transport_lost",
+                        title="HomeKit hub MQTT session lost",
+                        log_message="HomeKit hub MQTT transport dropped from connected to not connected (broker/hub/network).",
+                        notice_html=(
+                            "<p>The hub lost its MQTT subscription or broker session while <code>mqtt_enable</code> "
+                            "is on. Clients publishing to ingress topics may fail until the hub reconnects. Check the "
+                            "broker, ACLs, and <b>udi-poly-homekit-hub</b> logs.</p>"
+                        ),
+                    )
             elif code == MQTT_TRANSPORT_STATUS_DISABLED:
-                self._pg3_warn_and_notice(
-                    "homekit_mqtt_transport_disabled",
-                    title="HomeKit hub MQTT disabled",
-                    log_message="HomeKit hub MQTT was disabled while it had been connected (Custom Params or hub shutdown).",
-                    notice_html=(
-                        "<p>MQTT ingress is no longer active on the hub. WebSocket clients are unaffected if the "
-                        "hub WebSocket is still running.</p>"
-                    ),
-                )
+                if not self._planned_bridge_restart:
+                    self._pg3_warn_and_notice(
+                        "homekit_mqtt_transport_disabled",
+                        title="HomeKit hub MQTT disabled",
+                        log_message="HomeKit hub MQTT was disabled while it had been connected (Custom Params or hub shutdown).",
+                        notice_html=(
+                            "<p>MQTT ingress is no longer active on the hub. WebSocket clients are unaffected if the "
+                            "hub WebSocket is still running.</p>"
+                        ),
+                    )
         if code == MQTT_TRANSPORT_STATUS_CONNECTED:
+            self._planned_bridge_restart = False
             for nk in ("homekit_mqtt_transport_lost", "homekit_mqtt_transport_disabled"):
                 try:
                     self.Notices.delete(nk)
@@ -855,6 +872,7 @@ class Controller(Node):
         mqtt_changed = any(snap.get(k) != prev.get(k) for k in _BRIDGE_MQTT_RESTART_KEYS)
         if network_changed:
             LOGGER.info("Hub bind/zeroconf config changed; restarting bridge")
+            self._planned_bridge_restart = True
             try:
                 self.setDriver("GV0", 0, report=True, force=True, uom=25)
             except Exception:
@@ -865,9 +883,11 @@ class Controller(Node):
             fut.add_done_callback(self._on_full_restart_done)
         elif pairing_changed:
             LOGGER.info("Typed pairing config changed; reloading HomeKit sessions")
+            self._planned_bridge_restart = True
             asyncio.run_coroutine_threadsafe(self.bridge.restart_session(), self.mainloop)
         elif mqtt_changed:
             LOGGER.info("MQTT hub settings changed; reloading MQTT transport")
+            self._planned_bridge_restart = True
             asyncio.run_coroutine_threadsafe(self.bridge.restart_session(), self.mainloop)
 
     def _on_full_restart_done(self, fut) -> None:
@@ -879,6 +899,7 @@ class Controller(Node):
             LOGGER.exception("Bridge full restart after config change failed")
             if discover_restart_pending:
                 self._discover_restart_notice_pending = False
+                self._discover_restart_started_at = None
                 self._clear_discover_bridge_restart_notice()
                 self.report_error(
                     ERR_BRIDGE_START,
@@ -893,6 +914,7 @@ class Controller(Node):
             except Exception:
                 LOGGER.exception("setDriver after full_restart failure")
             self.ready = False
+            self._planned_bridge_restart = False
             return
         try:
             self.setDriver("GV0", 1, report=True, force=True, uom=25)
@@ -901,13 +923,21 @@ class Controller(Node):
             LOGGER.exception("setDriver GV0 after full_restart")
         self.ready = True
         self._sync_mqtt_status_driver_from_params()
+        self._planned_bridge_restart = False
         if discover_restart_pending:
             self._discover_restart_notice_pending = False
             self._clear_discover_bridge_restart_notice()
+            elapsed = (
+                time.time() - self._discover_restart_started_at
+                if self._discover_restart_started_at is not None
+                else None
+            )
+            self._discover_restart_started_at = None
             LOGGER.info(
                 "HomeKit bridge restart complete after discover probe auto-persist"
+                + (f" ({elapsed:.1f}s)" if elapsed is not None else "")
             )
-            self._append_hap_discover_bridge_restart_complete_notice()
+            self._finalize_hap_discover_after_probe_restart()
 
     def handler_config_done(self):
         self.handler_config_done_st = True
@@ -1039,6 +1069,7 @@ class Controller(Node):
         self.heartbeat()
         self.ready = True
         LOGGER.info("HomeKit Hub ready")
+        self._clear_legacy_embedded_hap_discover_notice()
         self._schedule_config_debug_export('bootstrap')
 
     def report_error(
@@ -1830,9 +1861,14 @@ class Controller(Node):
             parts.append(f"{detail}<br/>")
         if sec > 0:
             parts.append(f"<b>{sec}</b> second(s) remaining.")
-        self.Notices["discover_progress"] = "".join(parts)
+        notice_html = "".join(parts)
+        if notice_html == self._discover_progress_last_html:
+            return
+        self._discover_progress_last_html = notice_html
+        self.Notices["discover_progress"] = notice_html
 
     def _clear_discover_progress_notice(self) -> None:
+        self._discover_progress_last_html = None
         try:
             self.Notices.delete("discover_progress")
         except Exception:
@@ -1860,10 +1896,10 @@ class Controller(Node):
             )
             if remaining <= 0:
                 return
-            Timer(1.0, lambda: _tick(remaining - 1, this_token)).start()
+            Timer(_DISCOVER_PROGRESS_TICK_SEC, lambda: _tick(remaining - _DISCOVER_PROGRESS_TICK_SEC, this_token)).start()
 
         if seconds > 0:
-            Timer(1.0, lambda: _tick(seconds - 1, token)).start()
+            Timer(_DISCOVER_PROGRESS_TICK_SEC, lambda: _tick(seconds - _DISCOVER_PROGRESS_TICK_SEC, token)).start()
         return token
 
     def _stop_discover_progress_notice(self, token: int) -> None:
@@ -1877,8 +1913,9 @@ class Controller(Node):
             "<b>HomeKit bridge restarting</b><br/>"
             f"Applied <code>{html.escape(label, quote=True)}</code> from a successful discover probe. "
             "The bridge is restarting to use this bind permanently.<br/><br/>"
-            "This usually takes <b>1–2 minutes</b>. <b>Bridge Status</b> will return to "
-            "<b>Running</b> and the log will show <b>HomeKit Hub ready</b> when complete. "
+            "This may take up to <b>1–2 minutes</b> on some hosts; on Polisy it is often much faster. "
+            "<b>Bridge Status</b> will return to <b>Running</b> and the log will show "
+            "<b>HomeKit Hub ready</b> when complete. "
             "Paired devices may briefly disconnect during the restart.<br/><br/>"
             "Discover results are already saved below — you can enter pairing codes while waiting."
         )
@@ -1892,19 +1929,47 @@ class Controller(Node):
             except Exception:
                 pass
 
-    def _append_hap_discover_bridge_restart_complete_notice(self) -> None:
+    def _finalize_hap_discover_after_probe_restart(self) -> None:
+        """Rewrite hap_discover preamble after probe auto-persist restart completes."""
         try:
             cur = self.Notices["hap_discover"]
         except Exception:
             return
         if not isinstance(cur, str):
             return
-        if "Bridge restart complete" in cur:
+        restarting = (
+            "The bridge is restarting (see <b>HomeKit bridge restarting</b> notice) — "
+        )
+        complete = (
+            "<b>Bridge restart complete.</b> <b>Bridge Status</b> should show "
+            "<b>Running</b> — "
+        )
+        if restarting in cur:
+            cur = cur.replace(restarting, complete, 1)
+        elif "Bridge restart complete." not in cur:
+            cur = cur + (
+                "<br/><b>Bridge restart complete.</b> <b>Bridge Status</b> should show "
+                "<b>Running</b>; you can save pairing codes on the rows below."
+            )
+        self.Notices["hap_discover"] = cur
+
+    def _clear_legacy_embedded_hap_discover_notice(self) -> None:
+        """Remove pre-2.0.14 hap_discover notices that embedded zeroconf diagnostics."""
+        try:
+            cur = self.Notices["hap_discover"]
+        except Exception:
             return
-        self.Notices["hap_discover"] = (
-            cur
-            + "<br/><b>Bridge restart complete.</b> <b>Bridge Status</b> should show "
-            "<b>Running</b>; you can save pairing codes on the rows below."
+        if not isinstance(cur, str) or _LEGACY_HAP_DISCOVER_MARKER not in cur:
+            return
+        try:
+            self.Notices.delete("hap_discover")
+        except Exception:
+            try:
+                del self.Notices["hap_discover"]
+            except Exception:
+                pass
+        LOGGER.info(
+            "Cleared legacy hap_discover notice (embedded zeroconf diagnostic from pre-2.0.14)"
         )
 
     def _persist_zeroconf_probe_params(self, override: dict[str, str]) -> None:
@@ -1932,6 +1997,7 @@ class Controller(Node):
             applied,
         )
         self._discover_restart_notice_pending = True
+        self._discover_restart_started_at = time.time()
         self._clear_discover_progress_notice()
         self._set_discover_bridge_restart_notice(applied)
         self._maybe_restart_on_config_change()
@@ -1953,16 +2019,24 @@ class Controller(Node):
                 )
                 return
             base_params = self._bridge_get_params()
-            self._log_zeroconf_diag(context="DISCOVER")
+            discover_diag_pre = self._collect_zeroconf_diag()
+            primary_timeout = discover_primary_timeout_sec(
+                base_params,
+                discover_diag_pre,
+                default_sec=_DISCOVER_PRIMARY_TIMEOUT_SEC,
+                shortened_sec=_DISCOVER_PRIMARY_SHORT_TIMEOUT_SEC,
+            )
+            primary_label = f"Primary scan ({int(primary_timeout)}s)"
+            self._log_zeroconf_diag(context="DISCOVER", diag=discover_diag_pre)
             discover_notice_token = self._start_discover_progress_notice(
-                int(_DISCOVER_PRIMARY_TIMEOUT_SEC),
+                int(primary_timeout),
                 phase="HomeKit DISCOVER — primary scan",
                 detail=(
                     "Listening for mDNS <code>_hap._tcp</code> on the current network bind."
                 ),
             )
             fut = asyncio.run_coroutine_threadsafe(
-                self.bridge.discover_collect(_DISCOVER_PRIMARY_TIMEOUT_SEC),
+                self.bridge.discover_collect(primary_timeout),
                 self.mainloop,
             )
             try:
@@ -1986,7 +2060,7 @@ class Controller(Node):
 
             attempt_history.append(
                 {
-                    "label": "Primary scan (12s)",
+                    "label": primary_label,
                     "context": "DISCOVER primary",
                     "accessories_found": 0,
                 }
@@ -2071,13 +2145,14 @@ class Controller(Node):
                 if discover_notice_token is not None:
                     self._stop_discover_progress_notice(discover_notice_token)
                     discover_notice_token = None
-                self._persist_zeroconf_probe_params(winning_override)
                 self._present_hap_discover_results(
                     winning_rows,
                     source="manual",
                     attempt_history=attempt_history,
                     probe_auto_applied=winning_override,
+                    primary_diag=discover_diag,
                 )
+                self._persist_zeroconf_probe_params(winning_override)
                 return
 
             self._present_hap_discover_results(
@@ -2403,6 +2478,7 @@ class Controller(Node):
         source: str = "manual",
         attempt_history: list[dict[str, Any]] | None = None,
         probe_auto_applied: dict[str, str] | None = None,
+        primary_diag: dict[str, Any] | None = None,
     ) -> None:
         """Persist discover snapshot and UI notice.
 
@@ -2449,7 +2525,10 @@ class Controller(Node):
             notice = (
                 "HomeKit discover: no accessories found. Check LAN, firewall, and that the device is in pairing mode."
             )
-            extras = self._discover_notice_extras_html(attempt_history=attempt_history)
+            extras = self._discover_notice_extras_html(
+                attempt_history=attempt_history,
+                primary_diag=primary_diag,
+            )
             if extras:
                 notice += "<br/>" + extras
             self.Notices["hap_discover"] = notice
@@ -2529,7 +2608,11 @@ class Controller(Node):
                     f"<li><b>id</b> <code>{rid}</code> &nbsp; <b>name</b> {nm}</li>"
                 )
             parts.append("</ul>")
-        extras = self._discover_notice_extras_html(attempt_history=attempt_history)
+        extras = self._discover_notice_extras_html(
+            attempt_history=attempt_history,
+            probe_auto_applied=probe_auto_applied,
+            primary_diag=primary_diag,
+        )
         if extras:
             parts.append("<br/>" + extras)
         self.Notices["hap_discover"] = "".join(parts)

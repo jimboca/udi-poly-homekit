@@ -10,12 +10,17 @@ from homekit_hub.bridge import (
     DATA_KEY_LAST_HAP_DISCOVER,
     TYPED_PAIRING_SLOTS_KEY,
 )
+from homekit_hub.mqtt_topics import (
+    MQTT_TRANSPORT_STATUS_CONNECTED,
+    MQTT_TRANSPORT_STATUS_NOT_CONNECTED,
+)
 from node_funcs import generic_node_address
 from nodes.Controller import (
     ERR_ASYNC_LOOP_DEAD,
     Controller,
     _DATA_KEY_CUSTOM_PARAMS_DEFAULT_PRUNE_DONE,
     _DEFAULT_BRIDGE_PARAMS,
+    _LEGACY_HAP_DISCOVER_MARKER,
     _UI_SEED_CUSTOM_PARAMS,
 )
 from nodes.SensorNode import SensorNode
@@ -106,6 +111,11 @@ def _bare_controller():
     c._thermostat_control_aid = {}
     c._existing_sensor_addnode_retried = set()
     c.n_queue = []
+    c._discover_progress_last_html = None
+    c._discover_restart_started_at = None
+    c._discover_restart_notice_pending = False
+    c._planned_bridge_restart = False
+    c._mqtt_transport_driver = 0
     return c
 
 
@@ -893,7 +903,8 @@ def test_inventory_notice_only_on_manual_export():
 def test_persist_zeroconf_probe_params_merges_only_zeroconf_keys():
     c = _bare_controller()
     c.Params = FakeParams({"ws_host": "127.0.0.1", "zeroconf_unicast": "on"})
-    c.Data = FakeData({})
+    ecobee_row = [{"id": "f6:ed:f3:81:90:a3", "name": "My ecobee", "paired": False}]
+    c.Data = FakeData({DATA_KEY_LAST_HAP_DISCOVER: ecobee_row})
     c.Notices = MagicMock()
     c._discover_restart_notice_pending = False
     c._maybe_restart_on_config_change = MagicMock()
@@ -902,9 +913,72 @@ def test_persist_zeroconf_probe_params_merges_only_zeroconf_keys():
     assert c.Params.get("ws_host") == "127.0.0.1"
     assert c.Params.loads and c.Params.loads[0][1] is True
     assert DATA_KEY_DISCOVER_ZEROCONF_AUTO_APPLIED in c.Data._d
+    assert c.Data._d[DATA_KEY_LAST_HAP_DISCOVER] == ecobee_row
     assert c._discover_restart_notice_pending is True
     c.Notices.__setitem__.assert_called()
     c._maybe_restart_on_config_change.assert_called_once()
+
+
+def test_present_before_persist_preserves_last_hap_discover():
+    """Probe success path must save discover rows before persist triggers Data.save."""
+    c = _bare_controller()
+    c.Data = FakeData({DATA_KEY_LAST_HAP_DISCOVER: []})
+    c.TypedData = FakeTypedData({TYPED_PAIRING_SLOTS_KEY: []})
+    c.Notices = {}
+    rows = [{"id": "aa:bb", "name": "Lamp", "paired": False, "host": "10.0.0.1", "port": 80}]
+    diag = {
+        "zeroconf_interface_bind_source": "auto_primary",
+        "zeroconf_interface_ips": ["192.168.1.25"],
+    }
+    c._present_hap_discover_results(
+        rows,
+        source="manual",
+        attempt_history=[{"label": "Primary scan (6s)", "accessories_found": 0}],
+        probe_auto_applied={"zeroconf_interfaces": "all"},
+        primary_diag=diag,
+    )
+    assert c.Data._d[DATA_KEY_LAST_HAP_DISCOVER] == rows
+    assert "auto_primary bind on 192.168.1.25" in c.Notices["hap_discover"]
+
+
+def test_finalize_hap_discover_replaces_restarting_text():
+    c = _bare_controller()
+    c.Notices = {
+        "hap_discover": (
+            "<b>Devices found using an alternate network bind.</b> "
+            "The bridge is restarting (see <b>HomeKit bridge restarting</b> notice) — "
+            "pairing slots below are from this scan.<br/>"
+        )
+    }
+    c._finalize_hap_discover_after_probe_restart()
+    assert "is restarting" not in c.Notices["hap_discover"]
+    assert "Bridge restart complete." in c.Notices["hap_discover"]
+
+
+def test_mqtt_transport_lost_suppressed_during_planned_restart():
+    c = _bare_controller()
+    c.Params = FakeParams({"mqtt_enable": "true"})
+    c._mqtt_transport_driver = MQTT_TRANSPORT_STATUS_CONNECTED
+    c._planned_bridge_restart = True
+    c._pg3_warn_and_notice = MagicMock()
+    c._mqtt_transport_notice_callback(MQTT_TRANSPORT_STATUS_NOT_CONNECTED)
+    c._pg3_warn_and_notice.assert_not_called()
+
+
+def test_clear_legacy_embedded_hap_discover_notice():
+    c = _bare_controller()
+    c.Notices = {f"hap_discover": f"<b>{_LEGACY_HAP_DISCOVER_MARKER}</b><br/>old"}
+    c._clear_legacy_embedded_hap_discover_notice()
+    assert "hap_discover" not in c.Notices
+
+
+def test_discover_progress_notice_skips_unchanged_writes():
+    c = _bare_controller()
+    c.Notices = {}
+    c._set_discover_progress_notice(5, phase="HomeKit DISCOVER — primary scan", detail="")
+    first = c.Notices["discover_progress"]
+    c._set_discover_progress_notice(5, phase="HomeKit DISCOVER — primary scan", detail="")
+    assert c.Notices["discover_progress"] == first
 
 
 def test_discover_progress_notice_includes_phase():
@@ -922,7 +996,13 @@ def test_discover_progress_notice_includes_phase():
 def test_on_full_restart_done_clears_discover_bridge_restart_notice():
     c = _bare_controller()
     c._discover_restart_notice_pending = True
-    c.Notices = {"discover_bridge_restart": "pending", "hap_discover": "results"}
+    c.Notices = {
+        "discover_bridge_restart": "pending",
+        "hap_discover": (
+            "The bridge is restarting (see <b>HomeKit bridge restarting</b> notice) — "
+            "pairing slots below."
+        ),
+    }
     c.setDriver = MagicMock()
     c._sync_mqtt_status_driver_from_params = MagicMock()
     fut = MagicMock()
@@ -930,5 +1010,6 @@ def test_on_full_restart_done_clears_discover_bridge_restart_notice():
     c._on_full_restart_done(fut)
     assert c._discover_restart_notice_pending is False
     assert "discover_bridge_restart" not in c.Notices
-    assert "Bridge restart complete" in c.Notices["hap_discover"]
+    assert "Bridge restart complete." in c.Notices["hap_discover"]
+    assert "is restarting" not in c.Notices["hap_discover"]
 

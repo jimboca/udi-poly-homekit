@@ -52,7 +52,7 @@ Open the **HomeKit Hub** Node Server **Configuration** page and scroll to the **
 | Notice key | What it means |
 |------------|----------------|
 | **HomeKit DISCOVER running** (`discover_progress`) | Scan in progress — shows the current phase (primary scan, alternate-bind probe, or saving settings) and a countdown when applicable |
-| **HomeKit bridge restarting** (`discover_bridge_restart`) | After a successful alternate-bind probe, zeroconf Custom Params were saved and the bridge is restarting (~1–2 minutes) |
+| **HomeKit bridge restarting** (`discover_bridge_restart`) | After a successful alternate-bind probe, zeroconf Custom Params were saved and the bridge is restarting (may take up to 1–2 minutes; often much faster on Polisy) |
 | **HomeKit discover** (`hap_discover`) | Scan results — unpaired vs already paired, whether rows were added, attempt history and suggestions when probes ran |
 | **Zeroconf diagnostic** (`zeroconf_diag`) | Output of manual **ZEROCONF_DIAG** command only — full JSON snapshot (not shown during **DISCOVER**) |
 | **HomeKit Hub failed to start** | Bridge did not start — check log and zeroconf/port 5353 |
@@ -152,7 +152,11 @@ Check:
 
 If the **HomeKit discover** Notice says **no accessories found**, this is usually a network/mDNS issue, not a UI bug. The Notice includes **Discover attempt history** and **Suggestions** when alternate-bind probes ran. Zeroconf technical details are written to **`debug.log`** only (search `DISCOVER zeroconf diag`); run **ZEROCONF_DIAG** manually if you need the JSON snapshot in a Notice.
 
-When an alternate-bind probe succeeds, the hub **saves the winning `zeroconf_*` Custom Param(s)** and shows **HomeKit bridge restarting** while the bridge recycles (~1–2 minutes). Discover results and pairing rows are saved immediately — you can enter pairing codes while waiting for **Bridge Status** to return to **Running**.
+When an alternate-bind probe succeeds, the hub **saves the winning `zeroconf_*` Custom Param(s)** and shows **HomeKit bridge restarting** while the bridge recycles. On Polisy this is often **under a few seconds**; other hosts may take up to 1–2 minutes. Discover results and pairing rows are saved immediately — you can enter pairing codes while waiting for **Bridge Status** to return to **Running**. The **HomeKit discover** notice explains why the alternate bind was needed (for example primary scan used `auto_primary` on one interface only).
+
+On FreeBSD/Polisy, when alternate-bind probes are likely, the primary scan uses a **6 second** window instead of 12 seconds before probes run.
+
+After `zeroconf_interfaces=all` is saved, you may see a one-time log warning like `127.0.0.1 … Can't assign requested address` (errno 49). This is harmless on Polisy — discovery still works if accessories appear in the notice.
 
 ##### Reading the diagnostic summary
 

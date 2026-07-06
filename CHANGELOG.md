@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.15] - 2026-07-06
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Fixed
+
+- **(Standard + Professional)** **DISCOVER probe race** — save `last_hap_discover` and pairing rows before auto-persist triggers bridge restart (avoids brief empty customdata publish).
+- **(Standard + Professional)** **`hap_discover` notice after restart** — finalize wording when bridge restart completes instead of showing both “restarting” and “complete”.
+- **(Standard + Professional)** **Spurious MQTT lost notice** — suppress `homekit_mqtt_transport_lost` during planned bridge/session reload.
+
+### Changed
+
+- **(Standard + Professional)** **Success-path DISCOVER copy** — explain why alternate bind was needed (e.g. auto_primary on one interface); trim redundant failure suggestions when probe auto-apply succeeds.
+- **(Standard + Professional)** **Primary scan timing** — 6s primary window on FreeBSD/Polisy when alternate-bind probes are likely (was 12s).
+- **(Standard + Professional)** **`discover_progress` notices** — 2s tick and skip unchanged republishes to reduce MQTT churn.
+- **(Standard + Professional)** **Bridge restart notice** — clarify restart is often much faster on Polisy than the 1–2 minute upper bound.
+- **(Standard + Professional)** **Legacy notice cleanup** — remove pre-2.0.14 `hap_discover` notices with embedded zeroconf diagnostics on bootstrap.
+- **(Standard + Professional)** **DEBUGGING.md** — documents shortened primary scan, success explanation, and harmless FreeBSD loopback errno 49 after `zeroconf_interfaces=all`.
+- **(Standard + Professional)** Version **2.0.15** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.14] - 2026-07-05
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
