@@ -12,11 +12,11 @@
 #
 # PG3 release flow (clean tree; not detached HEAD):
 #   1. Bump nodes/__init__.py VERSION; commit.
-#   2. `make release`     — tag v<VERSION> and push current branch + tag.
+#   2. `make release`     — ruff lint, tag v<VERSION>, push current branch + tag.
 #                           Then in PG3 UI, edit the plugin and set Version to that exact VERSION.
-#   3. `make beta`        — push HEAD to the `beta` branch (reference) and build $(NAME)-beta-<VERSION>.zip.
+#   3. `make beta`        — ruff lint, push HEAD to the `beta` branch (reference) and build $(NAME)-beta-<VERSION>.zip.
 #                           Then in PG3 UI, edit the plugin and set Version to that exact VERSION.
-#   4. `make production`  — push HEAD to the `production` branch (reference) and build $(NAME)-Production-Professional-<VERSION>.zip (+ Standard via production-standard).
+#   4. `make production`  — ruff lint, push HEAD to the `production` branch (reference) and build $(NAME)-Production-Professional-<VERSION>.zip (+ Standard via production-standard).
 # The track-specific zip files are the actual deliverables uploaded to PG3.
 
 PYTHON ?= python3
@@ -44,6 +44,9 @@ xml-check:
 lint:
 	$(PYTHON) -m ruff check .
 
+# Gate for release/beta/production — same ruff check as CI (.github/workflows/ci.yml).
+release-check: lint
+
 format-check:
 	$(PYTHON) -m ruff format --check .
 
@@ -68,9 +71,9 @@ help:
 	@echo "  make test-integration    Live hub tests (HOMEKIT_WS_* / hub)"
 	@echo ""
 	@echo "PG3 release (clean tree; not detached HEAD)"
-	@echo "  make release             Tag v\$$VERSION and push current branch + tag"
-	@echo "  make beta                Push HEAD -> $(GIT_REMOTE)/$(BRANCH_BETA) and build $(NAME)-$(BRANCH_BETA)-\$$VERSION.zip"
-	@echo "  make production          Push HEAD -> $(GIT_REMOTE)/$(BRANCH_PRODUCTION); build $(NAME)-Production-Professional-\$$VERSION.zip + Standard"
+	@echo "  make release             Ruff lint; tag v\$$VERSION; push current branch + tag"
+	@echo "  make beta                Ruff lint; push HEAD -> $(GIT_REMOTE)/$(BRANCH_BETA); build $(NAME)-$(BRANCH_BETA)-\$$VERSION.zip"
+	@echo "  make production          Ruff lint; push HEAD -> $(GIT_REMOTE)/$(BRANCH_PRODUCTION); build $(NAME)-Production-Professional-\$$VERSION.zip + Standard"
 	@echo "  make production-standard Build $(NAME)-Production-Standard-\$$VERSION.zip (Standard store artifact)"
 	@echo "                           After make release / make beta, edit plugin in PG3 UI and set Version to \$$VERSION"
 	@echo "  make zip                 Ad-hoc local $(NAME).zip (no version suffix)"
@@ -92,7 +95,7 @@ zip:
 
 # Push current HEAD to $(GIT_REMOTE)/$(BRANCH_BETA) (reference) and build $(NAME)-$(BRANCH_BETA)-<VERSION>.zip
 # for upload to PG3. Requires clean tree; not detached HEAD.
-beta:
+beta: release-check
 	@set -e; \
 	ROOT=$$(pwd); \
 	VERSION=$$(sed -n 's/^VERSION = "\([^"]*\)"$$/\1/p' "$$ROOT/nodes/__init__.py"); \
@@ -120,7 +123,7 @@ beta:
 
 # Push current HEAD to $(GIT_REMOTE)/$(BRANCH_PRODUCTION) (reference) and build $(NAME)-Production-Professional-<VERSION>.zip
 # for upload to PG3. Requires clean tree; not detached HEAD.
-production:
+production: release-check
 	@set -e; \
 	ROOT=$$(pwd); \
 	VERSION=$$(sed -n 's/^VERSION = "\([^"]*\)"$$/\1/p' "$$ROOT/nodes/__init__.py"); \
@@ -168,7 +171,7 @@ production-standard:
 # Version = nodes/__init__.py VERSION (canonical). Track-specific zips are built by `make beta` / `make production`.
 # Run from this directory, or: make -C /path/to/udi-poly-homekit-hub release
 # Requires clean git working tree and a checked-out branch (not detached HEAD).
-release:
+release: release-check
 	@set -e; \
 	ROOT=$$(pwd); \
 	VERSION=$$(sed -n 's/^VERSION = "\([^"]*\)"$$/\1/p' "$$ROOT/nodes/__init__.py"); \
@@ -222,5 +225,5 @@ ws-raw:
 ws-smoke: ws-hello ws-list ws-get ws-subscribe ws-unsubscribe ws-snapshot-device ws-snapshot-all ws-raw
 	@echo "ws-smoke: finished ($(WS_HOST):$(WS_PORT))"
 
-.PHONY: check xml-check lint format-check black-check test test-unit test-integration help clean zip beta production production-standard release \
+.PHONY: check xml-check lint release-check format-check black-check test test-unit test-integration help clean zip beta production production-standard release \
 	ws-smoke ws-hello ws-list ws-get ws-subscribe ws-unsubscribe ws-snapshot-device ws-snapshot-all ws-raw
