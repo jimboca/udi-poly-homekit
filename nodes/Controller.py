@@ -1161,6 +1161,7 @@ class Controller(Node):
             time.sleep(0.1)
         self.n_queue.pop()
 
+    # %% professional-only begin
     def _wait_for_pg3_node_gone(self, addr: str, *, timeout_sec: float = 5.0) -> bool:
         """Best-effort wait until PG3 no longer lists *addr* after removenode."""
         addr = str(addr or '').strip()
@@ -1172,6 +1173,8 @@ class Controller(Node):
                 return True
             time.sleep(0.05)
         return self._pg3_node_meta(addr) is None
+
+    # %% professional-only end
 
     def _check_asyncio_loop_thread_health(self) -> None:
         """If the asyncio loop thread dies while the hub is ready, surface bridge failure on ISY.
@@ -1836,7 +1839,9 @@ class Controller(Node):
         if polltype == "longPoll":
             self._check_asyncio_loop_thread_health()
             self.heartbeat()
+            # %% professional-only begin
             self._maybe_refresh_generic_sensor_nodes()
+            # %% professional-only end
             if self._pair_success_notice_polls_remaining > 0:
                 self._pair_success_notice_polls_remaining -= 1
                 if self._pair_success_notice_polls_remaining == 0:

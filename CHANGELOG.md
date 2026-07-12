@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.17] - 2026-07-12
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Fixed
+
+- **(Standard)** longPoll no longer calls Professional-only `_maybe_refresh_generic_sensor_nodes` (AttributeError every longPoll).
+- **(Standard)** `_wait_for_pg3_node_gone` moved behind professional-only markers (it only served generic-node teardown).
+- **(Standard)** config-debug snapshot tolerates missing `homekit_hub.device_inventory` (Professional-only module excluded from Standard zips).
+- **(Standard + Professional)** Strip regression tests now fail on dangling `self.<pro_method>()` calls after Standard strip.
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.17** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.16] - 2026-07-12
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
