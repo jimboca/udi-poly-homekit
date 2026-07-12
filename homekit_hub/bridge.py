@@ -3502,6 +3502,8 @@ class HomeKitHubBridge:
             self.log.exception("put_characteristic_by_iid failed")
             return str(ex)
 
+    # %% professional-only end
+
     async def fetch_snapshot_values(
         self, device_id: str
     ) -> tuple[list[dict[str, Any]], Optional[str]]:
@@ -3544,6 +3546,7 @@ class HomeKitHubBridge:
             values.append(item)
         return values, None
 
+    # %% professional-only begin
     async def _export_device_inventory(
         self, alias: str, pairing, *, reason: str
     ) -> Optional[Any]:

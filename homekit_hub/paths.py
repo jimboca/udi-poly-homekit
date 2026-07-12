@@ -1,4 +1,4 @@
-"""Persistent storage paths for Professional device inventory export."""
+"""Persistent storage paths (config debug snapshot; Professional inventory export)."""
 
 from __future__ import annotations
 

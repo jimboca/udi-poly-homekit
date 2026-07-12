@@ -42,6 +42,9 @@ from homekit_hub.bridge import (
 from nodes import VERSION
 from .PairedDeviceNode import PairedDeviceNode
 
+from homekit_hub.paths import ensure_persistent_dir
+from homekit_hub.config_debug import export_config_debug
+
 # %% professional-only begin
 from dev_settings import (
     dev_edition_override_active,
@@ -49,8 +52,6 @@ from dev_settings import (
     licensed_edition,
     resolve_edition,
 )
-from homekit_hub.paths import ensure_persistent_dir
-from homekit_hub.config_debug import export_config_debug
 import homekit_hub.hap_apply as hap_apply
 from homekit_hub.char_map import (
     accessory_display_name_from_snapshot_rows,
@@ -247,6 +248,7 @@ class Controller(Node):
         self._planned_bridge_restart = False
         self._node_key_next_index_cache: Optional[int] = None
         self._mqtt_transport_driver = MQTT_TRANSPORT_STATUS_DISABLED
+        self._config_debug_export_token = 0
         # %% professional-only begin
         self.edition = 'Standard'
         self._generic_nodes: dict[str, Any] = {}
@@ -256,7 +258,6 @@ class Controller(Node):
         self._existing_sensor_addnode_retried: set[str] = set()
         self._sensor_longpoll_ticks = 0
         self._device_refresh_tokens: dict[str, int] = {}
-        self._config_debug_export_token = 0
         # %% professional-only end
 
         self.init_typed_params()

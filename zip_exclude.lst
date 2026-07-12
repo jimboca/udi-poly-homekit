@@ -17,3 +17,4 @@ release-pg3-store.txt
 *.lock
 dev_edition.txt
 persistent/*
+*.strip_bak

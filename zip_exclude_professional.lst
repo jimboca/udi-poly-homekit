@@ -2,7 +2,6 @@ homekit_hub/device_inventory.py
 homekit_hub/device_classifier.py
 homekit_hub/hap_apply.py
 homekit_hub/char_map.py
-homekit_hub/paths.py
 hub_node_funcs.py
 dev_settings.py
 nodes/ThermostatNode.py

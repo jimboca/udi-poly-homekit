@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.16] - 2026-07-12
+
+Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
+
+### Fixed
+
+- **(Standard)** Standard zip strip no longer removes shared hub pieces: `fetch_snapshot_values` (MQTT/WS `snapshot` for Ecobee), config-debug export token/imports, and `homekit_hub/paths.py`. Fixes Standard AttributeError / RPC failures when clients request snapshots.
+
+### Changed
+
+- **(Standard + Professional)** Version **2.0.16** — `nodes/__init__.py` **`VERSION`** and `profile/version.txt`.
+
 ## [2.0.15] - 2026-07-06
 
 Edition tags: **(Professional)** = Professional store zip only; **(Standard + Professional)** = both editions.
